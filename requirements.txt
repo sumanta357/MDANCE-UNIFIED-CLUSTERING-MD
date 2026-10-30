@@ -1,0 +1,14 @@
+# Core scientific stack
+numpy>=1.20
+scipy>=1.6
+scikit-learn>=0.24
+MDAnalysis>=2.0
+mdance==0.4.0
+matplotlib>=3.3
+cycler>=0.10
+PyYAML>=5.4
+# MDANCE 0.4.0 depends on torch: install the CPU build to avoid ~1 GB of
+# CUDA wheels on machines without a GPU:
+#   pip install torch --index-url https://download.pytorch.org/whl/cpu
+#   pip install mdance
+# (mdance pulls shapeGMMTorch as well; both arrive with `pip install mdance`)

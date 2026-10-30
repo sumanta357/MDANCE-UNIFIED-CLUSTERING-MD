@@ -1,0 +1,10 @@
+# Example configuration: protein-ligand complex clustering.
+# Ligand interaction metrics are active (auto-detected or explicit selection).
+preprocess:
+  selection: "protein and name CA"     # features for clustering (structure)
+  ligand_selection: "when_ligand"      # or e.g. "resname LIG"
+  align: true
+  wrap_molecules: true
+scoring:
+  weights: {representativeness: 0.20, population: 0.15, stability: 0.20,
+            quality: 0.15, interaction: 0.20, conformational: 0.10}

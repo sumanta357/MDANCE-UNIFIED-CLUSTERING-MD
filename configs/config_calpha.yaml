@@ -1,0 +1,10 @@
+# Example configuration: C-alpha clustering.
+preprocess:
+  selection: "name CA"
+  stride: 10
+  align: true
+clustering:
+  k_min: 2
+  k_max: 10
+validation:
+  bootstrap_n: 6

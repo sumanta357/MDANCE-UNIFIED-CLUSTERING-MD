@@ -1,0 +1,78 @@
+# Default configuration: protein backbone clustering.
+# All MDANCE-native methods + documented baselines run automatically.
+system:
+  output_dir: MDANCE_Analysis
+  seed: 42
+  plots_enabled: true
+  log_level: INFO
+
+preprocess:
+  xtc: trajectory.xtc
+  tpr: topology.tpr        # optional but preferred (periodic-box & naming)
+  gro: structure.gro
+  selection: "protein and backbone"
+  reference: first
+  stride: 10
+  start_time: 0            # ps
+  end_time: null           # null = last frame
+  skip_equil_frames: 0
+  wrap_molecules: true
+  center_protein: true
+  align: true
+  ligand_selection: when_ligand   # 'when_ligand' = auto-detect; or an explicit MDAnalysis selection
+
+features:
+  chunk_size: 512
+  use_float32: true
+  max_frames_for_full_matrix: 3000
+
+clustering:
+  k_min: 2
+  k_max: 8
+  nani_init_types: [strat_all, comp_sim, k-means++, quota]
+  nani_percentage: 10
+  divine_splits: [weighted_MSD, MSD]
+  divine_anchors: [nani]
+  divine_refine: true
+  equal_seed_methods: [greedy, medoid, comp_sim]
+  equal_threshold_quantiles: [0.10, 0.25, 0.40, 0.55, 0.70, 0.85, 0.95]
+  mdbirch_threshold_quantiles: [0.10, 0.25, 0.40, 0.55, 0.70, 0.85]
+  mdbirch_branching_factor: 50
+  helm_enabled: true
+  helm_initial_k: 10
+  helm_merge_schema: intra
+  helm_max_frames: 2000
+  baselines_enabled: true
+  agglomerative_linkages: [average, complete, ward]
+  dbscan_min_samples: 5
+  dbscan_eps_quantiles: [0.05, 0.15, 0.30, 0.50]
+
+benchmark:
+  enabled: true
+  gromos_cutoff_quantiles: [0.05, 0.10, 0.20, 0.35, 0.50, 0.70]
+  native_gmx: auto
+
+validation:
+  bootstrap_enabled: true
+  bootstrap_n: 6
+  bootstrap_frac: 0.8
+  bootstrap_top_solutions: 5
+  weights: {silhouette: 0.22, davies_bouldin: 0.18, calinski_harabasz: 0.14,
+            stability: 0.16, population_balance: 0.10, compactness: 0.08,
+            separation: 0.07, diversity: 0.05}
+
+representatives:
+  alternative_solutions: 2
+  nearest_to_centroid: true
+
+scoring:
+  weights: {representativeness: 0.25, population: 0.15, stability: 0.20,
+            quality: 0.15, interaction: 0.15, conformational: 0.10}
+  singleton_cluster_score: 60.0
+  temporal_window: 5
+  sensitivity_draws: 120
+  sensitivity_dirichlet_strength: 8.0
+
+plots:
+  tsne_enabled: false
+  heatmap_max_frames: 300

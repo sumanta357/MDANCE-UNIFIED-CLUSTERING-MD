@@ -1,0 +1,12 @@
+# Example configuration: binding-site-focused clustering.
+# Feature space = residues lining the pocket (change resid list as needed).
+preprocess:
+  selection: "protein and resid 45-52 78-84 110 and not name H*"
+  ligand_selection: "when_ligand"
+  stride: 5
+clustering:
+  k_min: 2
+  k_max: 6
+scoring:
+  weights: {representativeness: 0.25, population: 0.10, stability: 0.25,
+            quality: 0.20, interaction: 0.15, conformational: 0.05}

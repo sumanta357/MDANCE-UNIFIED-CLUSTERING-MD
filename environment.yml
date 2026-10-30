@@ -1,0 +1,17 @@
+name: mdance
+channels:
+  - conda-forge
+dependencies:
+  - python>=3.10
+  - pip
+  - numpy>=1.20
+  - scipy>=1.6
+  - scikit-learn>=0.24
+  - mdanalysis>=2.0
+  - matplotlib>=3.3
+  - cycler>=0.10
+  - pyyaml>=5.4
+  - pytest>=7.0
+  - pip:
+      - torch --index-url https://download.pytorch.org/whl/cpu
+      - mdance==0.4.0
