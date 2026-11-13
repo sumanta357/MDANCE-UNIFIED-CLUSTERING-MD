@@ -5,6 +5,21 @@ trajectory clustering**, **benchmarking against GROMACS `gmx cluster`**, and
 **automated selection of ONE best representative frame** from the trajectory
 for downstream structural / protein-ligand interaction analysis.
 
+Two behaviours are central:
+
+* **Automatic K selection** — an Elbow/Kneedle scan over K = 2..15 (extendable
+to 20), measured in the MDANCE MSD representation, chooses the K used by
+**NANI, DIVINE, HELM and Agglomerative**. eQual, mdBIRCH, DBSCAN and
+GROMOS/Daura keep their native threshold/density behaviour and are never
+forced onto that K. Results: `clustering/k_selection/`.
+* **Representative frames for every method** — each method's clusters are
+exported (medoid + nearest-to-centroid, actual trajectory frames with original
+frame index and simulation time) under
+`representatives/representative_frames/<METHOD>/`, while the recommended
+method (`representatives/method_recommendation.txt`) and the composite
+best-frame score (`representatives/BEST_REPRESENTATIVE_FRAME.pdb`) are
+reported independently. See `docs/automatic_k_and_representatives.md`.
+
 The scientific goal is *the final frame*, not the clustering: the pipeline
 ends by scoring every candidate representative frame (0–100), ranking them,
 reporting why the winner was chosen, and exporting
@@ -67,10 +82,17 @@ MDANCE_Analysis/
 ├── config/config.yaml                  # resolved configuration
 ├── preprocessing/{processed.xtc, processed.gro, preprocessing_report.txt}
 ├── features/{feature_data.npy, distance_matrix.npy}
-├── clustering/{mdance/, gromacs/, optimal_clustering/, clustering_summary.csv}
+├── clustering/{mdance/, gromacs/, optimal_clustering/, clustering_summary.csv,
+│               k_selection/{k_selection.csv, k_selection.json,
+│                            k_selection_elbow.png}}
 ├── representatives/{global_medoid.pdb, cluster_representatives/,
 │                    candidate_frames/, BEST_REPRESENTATIVE_FRAME.pdb,
-│                    candidate_frame_scores.csv, cluster_representatives.csv}
+│                    candidate_frame_scores.csv, cluster_representatives.csv,
+│                    representative_frames/<NANI|DIVINE|HELM|Agglomerative|
+│                        eQual|mdBIRCH|DBSCAN|GROMOS>/ (cluster_NNN_medoid.pdb,
+│                        cluster_NNN_centroid.pdb, representatives.csv),
+│                    method_recommendation.txt, RECOMMENDED_METHOD_FRAME.pdb,
+│                    method_representatives.json}
 ├── benchmarking/{mdance_vs_gromacs.csv, benchmarking_report.txt}
 ├── scoring/{scoring_metrics.csv, scoring_weights.yaml, sensitivity_analysis.csv}
 ├── plots/  *.png
@@ -89,8 +111,18 @@ requirements.txt, environment.yml, README.md
    **All atoms kept** (ligand/ions/RNA/cofactors preserved).
 3. **Features/distances** — MDANCE convention `(frames, 3·N_atoms)`;
    chunked MSD matrix, cross-validated against the MDANCE-native definition.
-4. **Cluster** — every compatible MDANCE method over configurable k /
-   initializer / threshold grids, timed and memory-tracked, reproducible seeds.
+3b. **Automatic K selection** — KmeansNANI scan over K = 2..15 (configurable,
+   max 20); dispersion `W(K) = sum_C (1/|C|) sum_{i<j in C} d_MSD(i,j)` on the
+   precomputed MDANCE MSD matrix (= `sum_i ||x_i-mean(C)||^2/(2*N_atoms)`),
+   **not** Euclidean k-means inertia; Kneedle/geometric elbow detection with
+   explicit ambiguity reporting; supporting silhouette, distance-space
+   Davies–Bouldin/Calinski–Harabasz, population distribution and bootstrap-ARI
+   stability; CSV/JSON/PNG saved.
+4. **Cluster** — every compatible MDANCE method. NANI, DIVINE, HELM and
+   Agglomerative run at the selected K; eQual (threshold sweep), mdBIRCH
+   (threshold sweep), DBSCAN (eps sweep) and GROMOS (cutoff sweep) keep their
+   native K-free behaviour. Timed, memory-tracked, reproducible seeds;
+   methods that disagree keep their own partitions.
 5. **Validate & select** — silhouette, distance-space Davies–Bouldin and
    Calinski–Harabasz, compactness/separation/diversity, population balance,
    bootstrap-ARI stability, multi-criteria weighted ranking (documented
@@ -99,9 +131,13 @@ requirements.txt, environment.yml, README.md
    MDANCE-MSD matrix (the algorithm behind `gmx cluster -m gromos`) at several
    cutoffs; native `gmx cluster` attempted when a `gmx` binary exists;
    differences explicitly documented rather than claimed equivalent.
-7. **Representatives** — per-cluster medoid (actual frame, MDANCE-native),
-   nearest-actual-frame-to-centroid, global medoid; centroids are never
-   exported (not physical frames).
+7. **Representatives** — **per method**: every cluster of every method family
+   gets a medoid PDB and a nearest-to-centroid PDB plus a `representatives.csv`
+   with original frame indices and times; the best solution's cluster medoids,
+   nearest-to-centroids and the global medoid are also written at the top level.
+   Centroids are never exported (not physical frames). The recommended method
+   and its representative frame are reported separately from the composite
+   frame score.
 8. **Best frame** — candidates (medoids + nearest-to-centroids + runner-up
    medoids) scored 0–100 from six min-max-normalized metric groups with
    YAML-configurable weights; ligand metrics optional (weights renormalize).
@@ -122,11 +158,15 @@ pytest tests/ -x -q
 * `tests/test_unit.py` — chunked-vs-native MSD equivalence, medoid/outlier
   semantics, gromos clustering, DB/CH distance-space metrics, scoring
   normalization, config validation.
+* `tests/test_k_selection.py` — dispersion identity (distance vs centered
+  coordinates) and elbow detection incl. the ambiguous/no-knee case.
 * `tests/test_integration.py` — builds a synthetic GROMACS-like trajectory
   (GRO + XTC via MDAnalysis writers, protein-like names so selections work)
-  and executes the **full** `run_mdance.py` pipeline end-to-end, asserting the
-  required output tree, banner and `BEST_REPRESENTATIVE_FRAME.pdb` against
-  real trajectory inputs.
+  and executes the **full** pipeline end-to-end, asserting the required output
+  tree, the K-selection results, that K-based methods used the selected K, the
+  per-method `representative_frames/` exports with frame/time metadata, the
+  independent method recommendation, the banner and
+  `BEST_REPRESENTATIVE_FRAME.pdb` against real trajectory inputs.
 
 ## Scientific assumptions (explicit)
 

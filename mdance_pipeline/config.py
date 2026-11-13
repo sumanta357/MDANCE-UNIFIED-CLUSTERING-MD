@@ -37,16 +37,29 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "max_frames_for_full_matrix": 3000,
         # Above this n, distance-matrix-based methods are skipped (memory).
     },
+    "k_selection": {
+        "enabled": True,            # automatic Elbow-based K selection
+        "k_min": 2,                # initial scan starts at 2
+        "k_max": 15,               # default scan upper limit (may be 20)
+        "max_allowed_k": 20,       # hard ceiling for the scan
+        "nani_init_type": "k-means++",   # MDANCE-native scan clusterer
+        "stability_repeats": 4,    # bootstrap ARI refits per K
+    },
     "clustering": {
         "k_min": 2,
-        "k_max": 8,
+        "k_max": 15,               # fallback sweep if auto-K is disabled
         "nani_init_types": ["strat_all", "comp_sim", "k-means++"],
         "nani_percentage": 10,
         "divine_splits": ["weighted_MSD"],
         "divine_anchors": ["nani"],
         "divine_refine": True,
         "equal_seed_methods": ["greedy", "medoid"],
-        "equal_threshold_quantiles": [0.10, 0.25, 0.40, 0.55, 0.70, 0.85, 0.95],
+        # eQual grows radius clusters (seed MSD <= threshold); low quantiles of
+        # the pairwise MSD distribution are the informative range. Its native
+        # low-density rejection is kept but scaled to the dataset (5%).
+        "equal_threshold_quantiles": [0.01, 0.02, 0.05, 0.08,
+                                      0.10, 0.15, 0.20, 0.30],
+        "equal_min_samples": 0.05,   # fraction of frames (eQual semantics)
         "equal_threshold_palettes": "auto",  # auto: quantiles of pairwise MSD
         "mdbirch_threshold_quantiles": [0.10, 0.25, 0.40, 0.55, 0.70, 0.85],
         "mdbirch_branching_factor": 50,
@@ -86,6 +99,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "representatives": {
         "alternative_solutions": 2,  # extra candidate sources (top-2 runners-up)
         "nearest_to_centroid": True,
+        "export_all_methods": True,   # per-method representative_frames/ tree
     },
     "scoring": {
         "weights": {
@@ -172,8 +186,20 @@ def validate_config(cfg: dict) -> list[str]:
     c = cfg["clustering"]
     if c.get("k_min", 2) < 1:
         errors.append("clustering.k_min must be >= 1")
-    if c.get("k_max", 8) < c.get("k_min", 2):
+    if c.get("k_max", 15) < c.get("k_min", 2):
         errors.append("clustering.k_max must be >= k_min")
+    ks = cfg.get("k_selection", {})
+    if ks.get("enabled", True):
+        if ks.get("k_min", 2) < 2:
+            errors.append("k_selection.k_min must be >= 2")
+        if ks.get("k_max", 15) < ks.get("k_min", 2):
+            errors.append("k_selection.k_max must be >= k_selection.k_min")
+        cap = int(ks.get("max_allowed_k", 20))
+        if ks.get("k_max", 15) > cap:
+            errors.append(f"k_selection.k_max must be <= max_allowed_k "
+                          f"({cap})")
+        if cap > 20:
+            errors.append("k_selection.max_allowed_k must be <= 20")
     v = cfg["validation"]
     if v.get("weights") and not (0 < sum(v["weights"].values()) <= 2.0):
         errors.append("validation.weights should sum to ~1.0")

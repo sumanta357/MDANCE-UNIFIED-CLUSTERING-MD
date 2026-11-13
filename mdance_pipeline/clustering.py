@@ -131,22 +131,31 @@ def run_divine(X, N_atoms, k, split="weighted_MSD", anchors="nani",
 
 
 def run_equal(X, N_atoms, threshold, seed_method="greedy",
-              reject_lowd=True) -> Solution:
-    """eQual radius clustering (MDANCE-native `ExtendedQuality.run`)."""
+              reject_lowd=True, min_samples: float | int = 0.05) -> Solution:
+    """eQual radius clustering (MDANCE-native `ExtendedQuality.run`).
+
+    `min_samples` follows eQual's own semantics: an int is an absolute number
+    of frames, a float in (0, 1) is a fraction of the data. A small fraction
+    keeps eQual's native low-density rejection while still allowing several
+    radius-defined clusters (its default of 10 frames collapses typical
+    trajectories into a single cluster).
+    """
     m0, t0 = _peak(), time.time()
 
     def _rerun(subset):
         model = md_equal.ExtendedQuality(data=X[subset], threshold=threshold,
                                          metric="MSD", N_atoms=N_atoms,
                                          seed_method=seed_method,
-                                         reject_lowd=reject_lowd)
+                                         reject_lowd=reject_lowd,
+                                         min_samples=min_samples)
         return labels_from_clusters(model.run(), len(subset))
 
     try:
         model = md_equal.ExtendedQuality(data=X, threshold=threshold,
                                          metric="MSD", N_atoms=N_atoms,
                                          seed_method=seed_method,
-                                         reject_lowd=reject_lowd)
+                                         reject_lowd=reject_lowd,
+                                         min_samples=min_samples)
         clusters = model.run()
         labels = labels_from_clusters(clusters, X.shape[0])
         return Solution(
@@ -412,17 +421,33 @@ def _gromos_subset(D, subset, cutoff):
 # --------------------------------------------------------------------------
 
 def run_all(X, D, N_atoms, cfg, logger) -> list[Solution]:
-    """Run every compatible method per configuration; skip with reasons."""
+    """Run every compatible method per configuration; skip with reasons.
+
+    K-based methods (NANI, Divine, HELM, Agglomerative) run at the single K
+    chosen by the automatic Elbow procedure (``clustering.selected_k``) when
+    it is available; otherwise they sweep ``k_min..k_max``. Threshold/density
+    methods (eQual, mdBirch, DBSCAN, gromos) keep their native behaviour and
+    are never forced onto the selected K.
+    """
     cl = cfg["clustering"]
     seed = int(cfg["system"]["seed"])
     n = X.shape[0]
     k_min = int(cl.get("k_min", 2))
-    k_max = min(int(cl.get("k_max", 8)), max(1, n - 1))
-    k_range = list(range(max(1, k_min), k_max + 1))
+    k_max = min(int(cl.get("k_max", 15)), max(1, n - 1))
+    selected_k = cl.get("selected_k")
+    if selected_k is not None:
+        selected_k = max(2, min(int(selected_k), max(2, n - 1)))
+        k_range = [selected_k]
+        logger.info("---- K-based methods run at the automatically selected "
+                    "K=%d (NANI / Divine / HELM / Agglomerative) ----",
+                    selected_k)
+    else:
+        k_range = list(range(max(1, k_min), k_max + 1))
+        logger.info("---- MDANCE-native clustering sweep (k in %s) ----",
+                    k_range)
+
     D_ok = D is not None
     sols: list[Solution] = []
-
-    logger.info("---- MDANCE-native clustering sweep (k in %s) ----", k_range)
 
     # --- NANI k-means (native) ---
     for init_type in cl.get("nani_init_types", ["strat_all"]):
@@ -455,13 +480,16 @@ def run_all(X, D, N_atoms, cfg, logger) -> list[Solution]:
     # --- eQual (native; threshold sweep) ---
     if D_ok:
         condensed = upper_desc_vals(D)
-        qs = cl.get("equal_threshold_quantiles", [0.1, 0.25, 0.4, 0.55, 0.7, 0.85, 0.95])
+        qs = cl.get("equal_threshold_quantiles",
+                    [0.01, 0.02, 0.05, 0.08, 0.10, 0.15, 0.20, 0.30])
         thresholds = [float(np.quantile(condensed, q)) for q in qs]
     else:
         thresholds = []
+    equal_min_samples = cl.get("equal_min_samples", 0.05)
     for seed_method in cl.get("equal_seed_methods", ["greedy"]):
         for thr in thresholds:
-            sol = run_equal(X, N_atoms, thr, seed_method=seed_method)
+            sol = run_equal(X, N_atoms, thr, seed_method=seed_method,
+                            min_samples=equal_min_samples)
             if sol.error:
                 logger.warning("skip %s: %s", sol.name, sol.error)
             else:
@@ -481,7 +509,8 @@ def run_all(X, D, N_atoms, cfg, logger) -> list[Solution]:
 
     # --- HELM (native; refines a coarse k-means partition) ---
     if cl.get("helm_enabled", True) and n <= int(cl.get("helm_max_frames", 2000)) and D_ok:
-        init_k = max(int(cl.get("helm_initial_k", 10)), k_max + 1)
+        init_k = max(int(cl.get("helm_initial_k", 10)),
+                     max(k_range) + 1, selected_k or 0)
         base = _initial_partition(X, init_k, seed=seed)
         for scheme in [cl.get("helm_merge_schema", "intra")]:
             for k in k_range:
@@ -497,8 +526,11 @@ def run_all(X, D, N_atoms, cfg, logger) -> list[Solution]:
     # --- pipeline-added baselines ---
     if cl.get("baselines_enabled", True) and D_ok:
         for linkage in cl.get("agglomerative_linkages", ["average"]):
+            # 'ward_on_coords' is the config label for Ward fitted on
+            # coordinates (Ward cannot use a precomputed matrix)
+            linkage_arg = "ward" if linkage == "ward_on_coords" else linkage
             for k in k_range:
-                sol = run_agglomerative(X, D, k, linkage=linkage)
+                sol = run_agglomerative(X, D, k, linkage=linkage_arg)
                 if sol.error:
                     logger.warning("skip %s: %s", sol.name, sol.error)
                 else:

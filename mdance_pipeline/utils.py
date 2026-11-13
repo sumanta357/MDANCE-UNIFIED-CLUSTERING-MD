@@ -119,6 +119,22 @@ def write_json(path: str, obj) -> None:
         json.dump(_clean(obj), fh, indent=2, default=str)
 
 
+def frame_meta(info: dict, analysis_idx: int) -> dict:
+    """Mapping between analysis and original frame for one frame index.
+
+    Returns {'analysis_frame', 'original_frame', 'time_ps', 'time_ns'} using
+    the bookkeeping kept by preprocessing (frame_indices / times).
+    """
+    i = int(analysis_idx)
+    t = float(info["times"][i])
+    return {
+        "analysis_frame": i,
+        "original_frame": int(info["frame_indices"][i]),
+        "time_ps": round(t, 3),
+        "time_ns": round(t / 1000.0, 6),
+    }
+
+
 def fmt_float(x, digits: int = 2) -> str:
     """Format a float for human-readable reports (never 'nan')."""
     if x is None:

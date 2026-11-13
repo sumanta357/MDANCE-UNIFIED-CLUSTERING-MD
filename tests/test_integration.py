@@ -91,7 +91,9 @@ INTEGRATION_OVERRIDES = {
                    "align": True, "reference": "first"},
     "features": {"chunk_size": 64, "use_float32": True,
                  "max_frames_for_full_matrix": 3000},
-    "clustering": {"k_min": 2, "k_max": 4,
+    "k_selection": {"enabled": True, "k_min": 2, "k_max": 5,
+                     "stability_repeats": 2},
+    "clustering": {"k_min": 2, "k_max": 5,
                    "nani_init_types": ["strat_all", "k-means++"],
                    "divine_splits": ["weighted_MSD"],
                    "divine_anchors": ["nani"],
@@ -140,7 +142,13 @@ def test_full_pipeline_end_to_end(synth_traj, tmp_path, capsys):
         "features/distance_matrix.npy",
         "clustering/optimal_clustering/labels.npy",
         "clustering/optimal_clustering/model_card.txt",
+        "clustering/k_selection/k_selection.csv",
+        "clustering/k_selection/k_selection.json",
+        "clustering/k_selection/k_selection_elbow.png",
         "representatives/global_medoid.pdb",
+        "representatives/method_recommendation.txt",
+        "representatives/method_representatives.json",
+        "representatives/RECOMMENDED_METHOD_FRAME.pdb",
         "representatives/BEST_REPRESENTATIVE_FRAME.pdb",
         "representatives/candidate_frame_scores.csv",
         "representatives/cluster_representatives.csv",
@@ -166,6 +174,52 @@ def test_full_pipeline_end_to_end(synth_traj, tmp_path, capsys):
         assert os.path.isfile(p), f"missing output: {rel}"
         if not rel.endswith((".npz",)):
             assert os.path.getsize(p) > 0, f"empty output: {rel}"
+
+    # --- automatic K selection ------------------------------------------
+    import json as jsonmod
+    with open(os.path.join(str(out_dir), "clustering", "k_selection",
+                           "k_selection.json")) as fh:
+        krep = jsonmod.load(fh)
+    assert krep["k_min"] == 2
+    assert 2 <= krep["selected_k"] <= krep["k_max"]
+    assert krep["dispersion_definition"]
+    assert krep["metrics"], "no K scan rows recorded"
+    assert [r["k"] for r in krep["metrics"]] == list(
+        range(krep["k_min"], krep["k_max"] + 1))
+    # K-based methods all used the selected K
+    with open(os.path.join(str(out_dir), "reports",
+                           "clustering_summary.json")) as fh:
+        sols = jsonmod.load(fh)
+    k_based = [s for s in sols
+               if s["name"].split("/")[0] in {"nani", "divine", "helm"}
+               and not s.get("error")]
+    assert k_based, "no K-based solutions were produced"
+    for s in k_based:
+        assert s["n_clusters"] == krep["selected_k"], (
+            f"{s['name']} used k={s['n_clusters']}, expected "
+            f"{krep['selected_k']}")
+
+    # --- per-method representative frames -------------------------------
+    reps_root = os.path.join(str(out_dir), "representatives",
+                             "representative_frames")
+    families = [d for d in os.listdir(reps_root)
+                if os.path.isdir(os.path.join(reps_root, d))]
+    assert len(families) >= 3, f"too few method folders: {families}"
+    for fam in families:
+        fam_dir = os.path.join(reps_root, fam)
+        pdbs = [f for f in os.listdir(fam_dir) if f.endswith(".pdb")]
+        assert pdbs, f"no PDB representatives in {fam}"
+        assert os.path.isfile(os.path.join(fam_dir, "representatives.csv"))
+        assert any("medoid" in p for p in pdbs), f"no medoid PDB in {fam}"
+    with open(os.path.join(str(out_dir), "representatives",
+                           "method_representatives.json")) as fh:
+        msum = jsonmod.load(fh)
+    assert msum["recommendation"] is not None
+    assert msum["families"], "no per-family summary written"
+    for fam in msum["families"].values():
+        for cl in fam["clusters"]:
+            assert cl["medoid_original_frame"] >= 0
+            assert cl["medoid_time_ps"] >= 0
 
     # banner printed to stdout
     captured = capsys.readouterr().out

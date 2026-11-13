@@ -26,16 +26,25 @@ features:
   use_float32: true
   max_frames_for_full_matrix: 3000
 
+k_selection:
+  enabled: true                   # automatic Elbow (Kneedle) K selection
+  k_min: 2                        # scan starts at 2
+  k_max: 15                       # default upper limit (may be raised to 20)
+  max_allowed_k: 20               # hard ceiling
+  nani_init_type: k-means++       # MDANCE-native scan clusterer
+  stability_repeats: 4            # bootstrap ARI refits per K
+
 clustering:
   k_min: 2
-  k_max: 8
+  k_max: 15                       # only used when k_selection.enabled = false
   nani_init_types: [strat_all, comp_sim, k-means++, quota]
   nani_percentage: 10
   divine_splits: [weighted_MSD, MSD]
   divine_anchors: [nani]
   divine_refine: true
   equal_seed_methods: [greedy, medoid, comp_sim]
-  equal_threshold_quantiles: [0.10, 0.25, 0.40, 0.55, 0.70, 0.85, 0.95]
+  equal_threshold_quantiles: [0.01, 0.02, 0.05, 0.08, 0.10, 0.15, 0.20, 0.30]
+  equal_min_samples: 0.05        # eQual low-density rejection (fraction of frames)
   mdbirch_threshold_quantiles: [0.10, 0.25, 0.40, 0.55, 0.70, 0.85]
   mdbirch_branching_factor: 50
   helm_enabled: true
@@ -63,7 +72,8 @@ validation:
 
 representatives:
   alternative_solutions: 2
-  nearest_to_centroid: true
+  nearest_to_centroid: true       # export cluster_NNN_centroid.pdb as well
+  export_all_methods: true        # representatives/representative_frames/<METHOD>/
 
 scoring:
   weights: {representativeness: 0.25, population: 0.15, stability: 0.20,

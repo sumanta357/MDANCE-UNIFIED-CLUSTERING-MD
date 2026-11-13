@@ -8,6 +8,7 @@ import os
 import numpy as np
 
 from mdance_pipeline import (clustering, features as feat, gromacs_bench,
+                             k_selection, method_representatives as method_reps,
                              preprocess as pre, reports,
                              representatives as reps, scoring,
                              validation as val, utils,
@@ -27,7 +28,9 @@ class Pipeline:
         utils.ensure_dirs(self.out_dir, [
             "config", "preprocessing", "features", "clustering",
             "clustering/mdance", "clustering/gromacs",
-            "clustering/optimal_clustering", "representatives",
+            "clustering/optimal_clustering",
+            "representatives",
+            "representatives/representative_frames",
             "representatives/cluster_representatives",
             "representatives/candidate_frames", "benchmarking", "scoring",
             "plots", "reports", "logs"])
@@ -42,6 +45,8 @@ class Pipeline:
         self.score_rows: list = []
         self.sens_summary: dict = {}
         self.bench_results: dict = {}
+        self.k_report: dict | None = None
+        self.method_summary: dict = {}
 
     # ------------------------------------------------------------- entry
     def run(self) -> dict:
@@ -50,6 +55,9 @@ class Pipeline:
             self._phase_preprocess()
         with utils.timed_step(log, "Phase 3: features & distance matrix"):
             self._phase_features()
+        if self.cfg.get("k_selection", {}).get("enabled", True):
+            with utils.timed_step(log, "Phase 3b: automatic K selection (Elbow)"):
+                self._phase_k_selection()
         with utils.timed_step(log, "Phase 4: MDANCE + baseline clustering sweep"):
             self.sols = clustering.run_all(
                 self.dist["X"], self.dist["D"],
@@ -100,6 +108,18 @@ class Pipeline:
         rgyr = feat.radius_of_gyration(X, self.info["n_atoms_selected"])
         self.dist = {"X": X, "D": D, "rmsd": rmsd, "rgyr": rgyr}
         return self.dist
+
+    # ----------------------------------------------------------- phase 3b
+    def _phase_k_selection(self) -> dict:
+        """Elbow-based K selection on the prepared MDANCE MSD representation."""
+        report = k_selection.run(
+            self.dist["X"], self.dist["D"],
+            self.info["n_atoms_selected"], self.cfg,
+            os.path.join(self.out_dir, "clustering", "k_selection"),
+            self.logger)
+        self.k_report = report
+        self.cfg["clustering"]["selected_k"] = int(report["selected_k"])
+        return report
 
     # ------------------------------------------------------------ phase 4-5
     def _phase_validation(self) -> None:
@@ -223,6 +243,11 @@ class Pipeline:
         # candidates here are medoids of best+alternatives
         log.info("Representatives extracted for %d clusters (%d alternates).",
                  len(self.best_stats), len(self.alt_stats))
+        # Every method gets its own representative frames (independent of the
+        # winning method) plus a method recommendation of its own.
+        self.method_summary = {}
+        if self.cfg["representatives"].get("export_all_methods", True):
+            self.method_summary = method_reps.export_all_methods(self)
 
     # ------------------------------------------------------------ phase 8-9
     def _phase_scoring(self) -> None:
@@ -441,8 +466,27 @@ class Pipeline:
             "                        (fingerprint input required; coordinates",
             "                        use MSD), Prime rep_frames (different data",
             "                        workflow - documented)",
-            "", "Method execution statistics (all solutions run):",
+            "", "Automatic K selection (Elbow, on the MDANCE MSD matrix):",
         ]
+        kr = self.k_report or {}
+        if kr:
+            lines += [
+                f"  scan range         : K = {kr['k_min']}..{kr['k_max']}"
+                f"  ({kr['scan_algorithm']})",
+                f"  elbow              : {kr['elbow_k']}"
+                f"  (algorithm={kr['elbow_algorithm']},"
+                f" ambiguous={kr['elbow_ambiguous']})",
+                f"  selected K         : {kr['selected_k']}",
+                "  dispersion         : " + kr["dispersion_definition"],
+                "  used by            : NANI, Divine, HELM, Agglomerative",
+                "  not applied to     : eQual, mdBIRCH, DBSCAN, GROMOS"
+                " (native thresholds)",
+                "  results            : clustering/k_selection/"
+                "(k_selection.csv, .json, k_selection_elbow.png)",
+            ]
+        else:
+            lines.append("  disabled (k_selection.enabled = false)")
+        lines += ["", "Method execution statistics (all solutions run):"]
         for s in self.sols:
             lines.append(f"  {s.name:<44} {'native' if s.native else 'added':<7}"
                          f" k={s.n_clusters:>3} {s.time_s:7.2f}s "
@@ -453,6 +497,30 @@ class Pipeline:
             lines.append(f"  #{m.rank:>2} {m.name:<44} composite={m.composite}"
                          f" silhouette={m.silhouette} db={m.davies_bouldin}"
                          f" stab={m.stability}")
+        rec = (self.method_summary or {}).get("recommendation")
+        lines += ["", "RECOMMENDED CLUSTERING METHOD (independent of the frame "
+                  "score):"]
+        if rec:
+            lines += [
+                f"  method            : {rec['method']} (rank #{rec['validation_rank']})",
+                f"  clusters          : {rec['n_clusters']}",
+                f"  representative    : cluster {rec['cluster_id']}"
+                f" medoid, analysis frame {rec['analysis_frame']}"
+                f" (original {rec['original_frame']}, {rec['time_ps']} ps)",
+                f"  structure         : {rec['structure']}",
+                "  details           : representatives/method_recommendation.txt",
+            ]
+        else:
+            lines.append("  none")
+        fams = (self.method_summary or {}).get("families") or {}
+        if fams:
+            lines += ["", "Per-method representative frames "
+                      "(representatives/representative_frames/):"]
+            for name, fam in fams.items():
+                lines.append(f"  {name:<14} {fam['solution']:<34}"
+                             f" k={fam['n_clusters']:<3}"
+                             f" rank=#{fam['validation_rank']}  "
+                             f"{fam['directory']}/")
         lines += ["",
                   "FINAL SELECTION (rationale: reports/FINAL_FRAME_SELECTION_REPORT.txt)",
                   f"  analysis frame  : {best_row['analysis_frame']}",
