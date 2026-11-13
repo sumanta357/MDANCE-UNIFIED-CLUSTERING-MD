@@ -44,6 +44,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "max_allowed_k": 20,       # hard ceiling for the scan
         "nani_init_type": "k-means++",   # MDANCE-native scan clusterer
         "stability_repeats": 4,    # bootstrap ARI refits per K
+        "per_method": False,       # True = independent elbow scan per method
+        "per_method_families": ["nani", "divine", "helm", "agglom"],
     },
     "clustering": {
         "k_min": 2,
@@ -114,6 +116,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "temporal_window": 5,
         "sensitivity_draws": 120,
         "sensitivity_dirichlet_strength": 8.0,
+        # compare representative poses from EVERY clustering method, each
+        # scored inside its own partition (set false for the legacy
+        # winner+runner-up candidate set)
+        "cross_method_poses": True,
     },
     "plots": {
         "tsne_enabled": False,       # t-SNE is slow; UMAP would add a heavy dep

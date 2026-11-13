@@ -7,18 +7,23 @@ for downstream structural / protein-ligand interaction analysis.
 
 Two behaviours are central:
 
-* **Automatic K selection** — an Elbow/Kneedle scan over K = 2..15 (extendable
-to 20), measured in the MDANCE MSD representation, chooses the K used by
-**NANI, DIVINE, HELM and Agglomerative**. eQual, mdBIRCH, DBSCAN and
-GROMOS/Daura keep their native threshold/density behaviour and are never
-forced onto that K. Results: `clustering/k_selection/`.
+* **Automatic K selection** — an Elbow/**Kneedle** scan over K = 2..15
+(extendable to 20), measured in the MDANCE MSD representation, chooses the K
+used by **NANI, DIVINE, HELM and Agglomerative** (one shared K by default;
+`k_selection.per_method: true` gives each of them its own scan and K). eQual,
+mdBIRCH, DBSCAN and GROMOS/Daura keep their native threshold/density
+behaviour and are never forced onto that K. Results:
+`clustering/k_selection/`.
 * **Representative frames for every method** — each method's clusters are
 exported (medoid + nearest-to-centroid, actual trajectory frames with original
 frame index and simulation time) under
-`representatives/representative_frames/<METHOD>/`, while the recommended
-method (`representatives/method_recommendation.txt`) and the composite
-best-frame score (`representatives/BEST_REPRESENTATIVE_FRAME.pdb`) are
-reported independently. See `docs/automatic_k_and_representatives.md`.
+`representatives/representative_frames/<METHOD>/`.
+* **Cross-method pose comparison** — all those poses compete in one ranked
+table (`representatives/pose_comparison.csv`), each scored inside its own
+method's partition, so `BEST_REPRESENTATIVE_FRAME.pdb` can come from **any**
+method. `reports/METHOD_AND_POSE_SUMMARY.txt` reports both the best method by
+cluster validation and the best pose, and whether they agree. See
+`docs/automatic_k_and_representatives.md`.
 
 The scientific goal is *the final frame*, not the clustering: the pipeline
 ends by scoring every candidate representative frame (0–100), ranking them,
@@ -92,12 +97,14 @@ MDANCE_Analysis/
 │                        eQual|mdBIRCH|DBSCAN|GROMOS>/ (cluster_NNN_medoid.pdb,
 │                        cluster_NNN_centroid.pdb, representatives.csv),
 │                    method_recommendation.txt, RECOMMENDED_METHOD_FRAME.pdb,
-│                    method_representatives.json}
+│                    method_representatives.json,
+│                    pose_comparison.csv, POSE_COMPARISON_REPORT.txt}
 ├── benchmarking/{mdance_vs_gromacs.csv, benchmarking_report.txt}
 ├── scoring/{scoring_metrics.csv, scoring_weights.yaml, sensitivity_analysis.csv}
 ├── plots/  *.png
 ├── reports/{complete_analysis_report.txt, clustering_summary.{csv,json},
-│            FINAL_FRAME_SELECTION_REPORT.txt}
+│            FINAL_FRAME_SELECTION_REPORT.txt,
+│            METHOD_AND_POSE_SUMMARY.txt}
 ├── logs/analysis.log
 requirements.txt, environment.yml, README.md
 ```
@@ -138,9 +145,13 @@ requirements.txt, environment.yml, README.md
    Centroids are never exported (not physical frames). The recommended method
    and its representative frame are reported separately from the composite
    frame score.
-8. **Best frame** — candidates (medoids + nearest-to-centroids + runner-up
-   medoids) scored 0–100 from six min-max-normalized metric groups with
-   YAML-configurable weights; ligand metrics optional (weights renormalize).
+8. **Best frame (cross-method)** — the medoid of every cluster of every
+   method (plus the nearest-to-centroid frame when different) is scored 0–100
+   from six min-max-normalized metric groups with YAML-configurable weights,
+   each pose evaluated inside its own method's partition; ligand metrics are
+   optional (weights renormalize). The winner can come from any method, and
+   `reports/METHOD_AND_POSE_SUMMARY.txt` states the best method and the best
+   pose separately.
 9. **Sensitivity** — Dirichlet weight perturbations; winner frequency; most
    robust frame reported.
 10. **Visualization** — population, silhouette, RMSD, distance heatmap, PCA,

@@ -24,11 +24,27 @@ BASE_WEIGHTS = {
 
 def raw_metrics_table(candidates, cand_labels, best_labels, X, D, N_atoms,
                       info, cfg):
-    """Compute the raw (un-normalized) metric values for every candidate."""
+    """Single-partition convenience wrapper (kept for compatibility)."""
+    best = np.asarray(best_labels)
+    cands = [{"frame": int(c), "labels": best,
+              "cluster_id": int(best[c]) if best[c] >= 0 else -1,
+              "tag": cand_labels[i] if i < len(cand_labels) else ""}
+             for i, c in enumerate(candidates)]
+    return cross_method_metrics(cands, X, D, N_atoms, info, cfg)
+
+
+def cross_method_metrics(cands, X, D, N_atoms, info, cfg):
+    """Raw (un-normalized) metrics for candidates from ANY method partition.
+
+    Each candidate carries its own `labels` array and `cluster_id`, so a pose
+    produced by one clustering method is scored inside that method's own
+    cluster structure (population, medoid distance, stability and quality
+    typicality are all relative to that partition). This is what makes the
+    final pose comparison genuinely cross-method.
+    """
     from mdance_pipeline.features import radius_of_gyration, rmsd_series
     scfg = cfg["scoring"]
     n = X.shape[0]
-    best = np.asarray(best_labels)
     rg = radius_of_gyration(X, N_atoms)
     rmsd_ref = rmsd_series(X, N_atoms)
 
@@ -40,10 +56,11 @@ def raw_metrics_table(candidates, cand_labels, best_labels, X, D, N_atoms,
     comp_max = float(np.max(comp_vals)) or 1e-12
 
     rows = []
-    for ci, cand in enumerate(candidates):
-        c = int(cand)
-        cid = int(best[c]) if best[c] >= 0 else -1
-        members_idx = np.flatnonzero(best == cid) if cid >= 0 else np.array([c])
+    for ci, cand in enumerate(cands):
+        c = int(cand["frame"])
+        labels = np.asarray(cand["labels"])
+        cid = int(cand.get("cluster_id", labels[c]))
+        members_idx = np.flatnonzero(labels == cid) if cid >= 0 else np.array([c])
         medoid_i = _cluster_medoid(members_idx, X, N_atoms)
         d_med = float(D[c, medoid_i]) if (D is not None and medoid_i is not None) else 0.0
         cluster_max = (float(D[members_idx][:, medoid_i].max())
@@ -108,7 +125,11 @@ def raw_metrics_table(candidates, cand_labels, best_labels, X, D, N_atoms,
             "quality": float(quality),
             "interaction": inter,
             "conformational": float(conf),
-            "label": cand_labels[ci] if ci < len(cand_labels) else "",
+            "label": cand.get("tag", ""),
+            "source_method": cand.get("method", ""),
+            "source_family": cand.get("family", ""),
+            "source_kind": cand.get("kind", ""),
+            "source_k": cand.get("k", None),
         })
     return rows
 

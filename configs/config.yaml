@@ -33,6 +33,8 @@ k_selection:
   max_allowed_k: 20               # hard ceiling
   nani_init_type: k-means++       # MDANCE-native scan clusterer
   stability_repeats: 4            # bootstrap ARI refits per K
+  per_method: false               # true = an independent elbow scan per method
+  per_method_families: [nani, divine, helm, agglom]
 
 clustering:
   k_min: 2
@@ -82,6 +84,7 @@ scoring:
   temporal_window: 5
   sensitivity_draws: 120
   sensitivity_dirichlet_strength: 8.0
+  cross_method_poses: true        # compare poses from EVERY method, each scored in its own partition
 
 plots:
   tsne_enabled: false

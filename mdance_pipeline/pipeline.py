@@ -111,14 +111,28 @@ class Pipeline:
 
     # ----------------------------------------------------------- phase 3b
     def _phase_k_selection(self) -> dict:
-        """Elbow-based K selection on the prepared MDANCE MSD representation."""
+        """Elbow-based K selection on the prepared MDANCE MSD representation.
+
+        Default: one K for all K-based methods. With
+        ``k_selection.per_method: true`` each of NANI / Divine / HELM /
+        Agglomerative gets its own elbow scan and therefore its own K.
+        """
+        ks_dir = os.path.join(self.out_dir, "clustering", "k_selection")
         report = k_selection.run(
             self.dist["X"], self.dist["D"],
-            self.info["n_atoms_selected"], self.cfg,
-            os.path.join(self.out_dir, "clustering", "k_selection"),
-            self.logger)
+            self.info["n_atoms_selected"], self.cfg, ks_dir, self.logger)
         self.k_report = report
         self.cfg["clustering"]["selected_k"] = int(report["selected_k"])
+        if self.cfg["k_selection"].get("per_method", False):
+            per = k_selection.run_per_method(
+                self.dist["X"], self.dist["D"],
+                self.info["n_atoms_selected"], self.cfg, ks_dir, self.logger)
+            self.k_report_per_method = per
+            self.cfg["clustering"]["selected_k_map"] = {
+                fam: int(v["selected_k"])
+                for fam, v in per.get("per_method", {}).items()}
+            self.logger.info("Per-method K: %s",
+                             self.cfg["clustering"]["selected_k_map"])
         return report
 
     # ------------------------------------------------------------ phase 4-5
@@ -254,40 +268,44 @@ class Pipeline:
         log = self.logger
         X, D = self.dist["X"], self.dist["D"]
         N = self.info["n_atoms_selected"]
-        candidates, cand_labels = [], []
-        seen: set[int] = set()
-        st0 = self.best_stats
-        for cid in sorted(st0.keys()):
-            for idx, tag in ((st0[cid]["medoid_frame"], f"medoid(c{cid})"),
-                             (st0[cid]["nearest_to_centroid"],
-                              f"nearest-centroid(c{cid})")):
-                if idx not in seen:
-                    seen.add(idx)
-                    candidates.append(idx)
-                    cand_labels.append(tag)
-        for alt_i, (m, st) in enumerate(self.alt_stats, 1):
-            for cid in sorted(st.keys()):
-                idx = st[cid]["medoid_frame"]
-                if idx not in seen:
-                    seen.add(idx)
-                    candidates.append(idx)
-                    cand_labels.append(f"alt{alt_i}[{m.name[:18]}]-medoid(c{cid})")
-        if not candidates:
+        # Cross-method pose comparison: every method's representative frames
+        # (medoid + nearest-to-centroid of every cluster) compete in ONE ranked
+        # table, each scored inside its own method's partition.
+        self.pose_candidates: list[dict] = []
+        if self.cfg["scoring"].get("cross_method_poses", True):
+            _, self.pose_candidates = method_reps.collect_method_candidates(
+                self)
+        if not self.pose_candidates:
+            # fallback: winner + runner-up solutions only (legacy behaviour)
+            cands, tags = [], []
+            for cid in sorted(self.best_stats):
+                for idx, tag in ((self.best_stats[cid]["medoid_frame"],
+                                  f"medoid(c{cid})"),
+                                 (self.best_stats[cid]["nearest_to_centroid"],
+                                  f"nearest-centroid(c{cid})")):
+                    cands.append(idx)
+                    tags.append(tag)
+            self.pose_candidates = [
+                {"frame": int(c), "labels": self.best_labels,
+                 "cluster_id": int(self.best_labels[c]),
+                 "method": self.best_metrics.name,
+                 "family": self.best_metrics.family.split("/")[0],
+                 "k": int(self.best_metrics.n_clusters), "kind": "medoid",
+                 "tag": tags[i]} for i, c in enumerate(cands)]
+        if not self.pose_candidates:
             raise RuntimeError("No candidate representative frames found.")
-        log.info("Scoring %d candidate frames.", len(candidates))
-        rows = scoring.raw_metrics_table(
-            candidates, cand_labels, self.best_labels, X, D, N, self.info,
-            self.cfg)
-        best_sol = next(
-            (s for s in self.sols if s.name == self.best_metrics.name), None)
-        best_name = best_sol.name if best_sol else self.best_metrics.name
-        best_k = int(len(np.unique(self.best_labels[self.best_labels >= 0])))
+        log.info("Cross-method pose comparison: %d candidates from %d methods.",
+                 len(self.pose_candidates),
+                 len({c["method"] for c in self.pose_candidates}))
+        rows = scoring.cross_method_metrics(
+            self.pose_candidates, X, D, N, self.info, self.cfg)
         for r in rows:
-            r["algorithm"] = best_name
+            r["algorithm"] = r.get("source_method") or self.best_metrics.name
             r["metric"] = "MSD (MDANCE)"
-            r["optimal_k"] = best_k
+            r["optimal_k"] = r.get("source_k")
         rows = scoring.score_candidates(rows, self.cfg)
         self.score_rows = rows
+        self._write_cross_method_table(rows)
 
         sens_rows, self.sens_summary = scoring.sensitivity_analysis(
             rows, self.ranked[1:4], self.cfg, log)
@@ -296,7 +314,8 @@ class Pipeline:
         keys = ["rank", "analysis_frame", "original_frame", "time_ps",
                 "cluster_id", "cluster_population", "cluster_pop_frac",
                 "distance_to_medoid", "algorithm", "metric", "optimal_k",
-                "label", "representativeness", "population", "stability",
+                "source_family", "source_kind", "label",
+                "representativeness", "population", "stability",
                 "quality", "interaction", "conformational",
                 "score_representativeness", "score_population",
                 "score_stability", "score_quality", "score_interaction",
@@ -312,11 +331,14 @@ class Pipeline:
         reps_dir = os.path.join(self.out_dir, "representatives")
         for r in rows:
             idx = r["analysis_frame"]
+            fam = (r.get("source_family") or "pose").replace("/", "_")
             reps.write_frame_pdb(
                 self.info, idx,
                 os.path.join(reps_dir, "candidate_frames",
-                             f"score{r['final_score']:.2f}_cluster{r['cluster_id']}"
+                             f"score{r['final_score']:.2f}_{fam}"
+                             f"_cluster{r['cluster_id'] + 1}"
                              f"_frame{r['original_frame']}.pdb"), logger=log)
+        self._annotate_recommendation(rows)
 
         import yaml
         eff = dict(self.cfg["scoring"]["weights"])
@@ -343,14 +365,149 @@ class Pipeline:
                 wr.writerows(sens_rows)
         utils.write_csv(
             os.path.join(self.out_dir, "scoring", "scoring_metrics.csv"),
-            ["rank", "candidate_label", "analysis_frame", "original_frame",
-             "cluster_id", "final_score"] +
+            ["rank", "method", "family", "kind", "candidate_label",
+             "analysis_frame", "original_frame", "cluster_id",
+             "final_score"] +
             [f"score_{k}" for k in scoring.METRIC_KEYS],
-            [[r.get(k, "") for k in (["rank", "label", "analysis_frame",
-                                      "original_frame", "cluster_id",
-                                      "final_score"] +
+            [[r.get(k, "") for k in (["rank", "source_method",
+                                      "source_family", "source_kind", "label",
+                                      "analysis_frame", "original_frame",
+                                      "cluster_id", "final_score"] +
                                      [f"score_{k}" for k in scoring.METRIC_KEYS])]
              for r in rows])
+
+    # --------------------------------------------------- cross-method poses
+    def _write_cross_method_table(self, rows: list[dict]) -> None:
+        """Ranked cross-method pose table + per-method best pose."""
+        reps_dir = os.path.join(self.out_dir, "representatives")
+        header = ["rank", "method", "family", "kind", "method_k",
+                  "cluster_id", "cluster_population", "analysis_frame",
+                  "original_frame", "time_ps"] + \
+                 [f"score_{k}" for k in scoring.METRIC_KEYS] + ["final_score"]
+        table = []
+        for r in rows:
+            table.append([r["rank"], r.get("source_method", ""),
+                          r.get("source_family", ""), r.get("source_kind", ""),
+                          r.get("source_k"), r["cluster_id"] + 1,
+                          r["cluster_population"], r["analysis_frame"],
+                          r["original_frame"], round(r["time_ps"], 3)] +
+                         [r.get(f"score_{k}") for k in scoring.METRIC_KEYS] +
+                         [r["final_score"]])
+        utils.write_csv(os.path.join(reps_dir, "pose_comparison.csv"), header,
+                        table)
+
+        best_per_family: dict[str, dict] = {}
+        for r in rows:
+            fam = r.get("source_family") or "?"
+            if fam not in best_per_family or \
+                    r["final_score"] > best_per_family[fam]["final_score"]:
+                best_per_family[fam] = r
+        top = rows[0]
+        lines = [
+            "CROSS-METHOD REPRESENTATIVE POSE COMPARISON",
+            "=" * 70, "",
+            "Every method contributes the medoid (and nearest-to-centroid) of "
+            "every cluster; each pose is scored inside its OWN method "
+            "partition.",
+            f"Candidates compared      : {len(rows)}",
+            f"Methods compared         : {len(best_per_family)}",
+            "",
+            "Best pose per method (by composite pose score):",
+        ]
+        for fam, r in sorted(best_per_family.items(),
+                             key=lambda kv: -kv[1]["final_score"]):
+            lines.append(
+                f"  {fam:<14} {r.get('source_method', ''):<34}"
+                f" cluster {r['cluster_id'] + 1:<3}"
+                f" frame {r['analysis_frame']:<5}"
+                f" (orig {r['original_frame']:<5}) score {r['final_score']:6.2f}")
+        lines += ["", "OVERALL BEST POSE:",
+                  f"  method          : {top.get('source_method', '')}",
+                  f"  family          : {top.get('source_family', '')}",
+                  f"  pose kind       : {top.get('source_kind', '')}",
+                  f"  cluster         : {top['cluster_id'] + 1}"
+                  f" (population {top['cluster_population']})",
+                  f"  analysis frame  : {top['analysis_frame']}",
+                  f"  original frame  : {top['original_frame']}",
+                  f"  time            : {top['time_ps'] / 1000:.3f} ns",
+                  f"  composite score : {top['final_score']:.2f} / 100",
+                  "  structure       : representatives/"
+                  "BEST_REPRESENTATIVE_FRAME.pdb"]
+        with open(os.path.join(reps_dir, "POSE_COMPARISON_REPORT.txt"),
+                  "w") as fh:
+            fh.write("\n".join(lines))
+        self.logger.info("Best cross-method pose: %s cluster %d, score %.2f",
+                         top.get("source_method", "?"),
+                         top["cluster_id"] + 1, top["final_score"])
+
+    def _annotate_recommendation(self, rows: list[dict]) -> None:
+        """State recommended method vs pose winner, and flag disagreement."""
+        path = os.path.join(self.out_dir, "representatives",
+                            "method_recommendation.txt")
+        top = rows[0]
+        rec_name = self.ranked[0].name if self.ranked else "?"
+        best_per_family: dict[str, dict] = {}
+        for r in rows:
+            fam = r.get("source_family") or "?"
+            if fam not in best_per_family or \
+                    r["final_score"] > best_per_family[fam]["final_score"]:
+                best_per_family[fam] = r
+        agree = top.get("source_method") == rec_name
+        lines = ["",
+                 "CROSS-METHOD POSE COMPARISON (independent layer)",
+                 "=" * 68,
+                 f"poses compared          : {len(rows)}",
+                 f"pose winner method      : {top.get('source_method', '')}",
+                 f"pose winner family      : {top.get('source_family', '')}",
+                 f"pose winner cluster     : {top['cluster_id'] + 1}"
+                 f" (population {top['cluster_population']})",
+                 f"pose winner frame       : analysis {top['analysis_frame']}"
+                 f" / original {top['original_frame']}"
+                 f" / {top['time_ps'] / 1000:.3f} ns",
+                 f"pose winner score       : {top['final_score']:.2f} / 100",
+                 f"recommended method      : {rec_name}"
+                 f" (validation rank #{self.ranked[0].rank if self.ranked else '?'})",
+                 f"recommendation agrees   : {'YES' if agree else 'NO'}",
+                 "",
+                 "Best pose score per method:"]
+        for fam, r in sorted(best_per_family.items(),
+                             key=lambda kv: -kv[1]["final_score"]):
+            lines.append(f"  {fam:<14} {r['final_score']:6.2f}"
+                         f"  ({r.get('source_method', '')})")
+        with open(path, "a") as fh:
+            fh.write("\n".join(lines) + "\n")
+        with open(os.path.join(self.out_dir, "reports",
+                               "METHOD_AND_POSE_SUMMARY.txt"), "w") as fh:
+            fh.write("\n".join([
+                "BEST CLUSTERING METHOD AND ITS SELECTED POSE",
+                "=" * 70, "",
+                "Two independent answers are reported:",
+                "  1. best METHOD by cluster validation (ranking in "
+                "clustering/clustering_summary.csv)",
+                "  2. best POSE by composite frame score across ALL method "
+                "representatives",
+                "",
+                f"Best method (validation) : {self.ranked[0].name}",
+                f"  cluster validation score: {self.ranked[0].composite}",
+                f"  representative structure: "
+                "representatives/RECOMMENDED_METHOD_FRAME.pdb",
+                "",
+                f"Best pose (all methods)  : {top.get('source_method', '')}",
+                f"  frame                 : analysis "
+                f"{top['analysis_frame']} / original "
+                f"{top['original_frame']} / "
+                f"{top['time_ps'] / 1000:.3f} ns",
+                f"  cluster               : {top['cluster_id'] + 1}"
+                f" (population {top['cluster_population']})",
+                f"  composite pose score  : {top['final_score']:.2f} / 100",
+                f"  structure             : "
+                "representatives/BEST_REPRESENTATIVE_FRAME.pdb",
+                f"  same method as above  : {'YES' if agree else 'NO'}",
+                "", "Details:",
+                "  representatives/pose_comparison.csv",
+                "  representatives/POSE_COMPARISON_REPORT.txt",
+                "  reports/FINAL_FRAME_SELECTION_REPORT.txt",
+            ]))
 
     # ------------------------------------------------------------ phase 10
     def _phase_plotting(self) -> None:

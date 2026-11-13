@@ -87,6 +87,65 @@ def _best_per_family(sols, ranked, selected_k: int | None = None) -> dict:
     return best
 
 
+def collect_method_candidates(pipe) -> tuple[dict, list[dict]]:
+    """All per-method representative frames as scoring candidates.
+
+    One solution per method (the best validation-ranked of that method, or the
+    closest usable one if all its partitions were degenerate). Every cluster
+    contributes its medoid and, when enabled, its nearest-to-centroid frame.
+    Each candidate carries the labels of ITS OWN method partition so the
+    composite score is computed inside that method's cluster structure.
+
+    Returns (chosen, candidates).
+    """
+    N = pipe.info["n_atoms_selected"]
+    X = pipe.dist["X"]
+    selected_k = pipe.cfg["clustering"].get("selected_k")
+    chosen = _best_per_family(pipe.sols, pipe.ranked, selected_k)
+    for sol in (pipe.bench_results or {}).get("solutions", []) or []:
+        if sol.labels.size == 0 or sol.error or sol.n_clusters < 2:
+            continue
+        key = "gromos"
+        cur = chosen.get(key)
+        better = (cur is None or
+                  abs(sol.n_clusters - (selected_k or sol.n_clusters)) <
+                  abs(cur[1].n_clusters - (selected_k or sol.n_clusters)))
+        if better:
+            chosen[key] = (None, sol)
+
+    write_centroid = bool(
+        pipe.cfg["representatives"].get("nearest_to_centroid", True))
+    candidates: list[dict] = []
+    for family, (metric, sol) in sorted(chosen.items()):
+        stats = reps.cluster_centroids_stats(X, sol.labels, N)
+        if not stats:
+            continue
+        for cid in sorted(stats):
+            st = stats[cid]
+            kinds = [("medoid", st["medoid_frame"])]
+            # when the medoid IS the frame nearest the centroid, one entry is
+            # enough: the same pose would otherwise be scored twice
+            if write_centroid and \
+                    st["nearest_to_centroid"] != st["medoid_frame"]:
+                kinds.append(("nearest_centroid", st["nearest_to_centroid"]))
+            for kind, frame in kinds:
+                candidates.append({
+                    "frame": int(frame),
+                    "labels": sol.labels,
+                    "cluster_id": int(cid),
+                    "method": sol.name,
+                    "family": _family_root(family),
+                    "family_raw": family,
+                    "solution": sol,
+                    "k": int(sol.n_clusters),
+                    "kind": kind,
+                    "population": int(st["population"]),
+                    "tag": (f"{_family_root(family)}:{sol.name}:"
+                            f"{kind}(c{cid + 1})"),
+                })
+    return chosen, candidates
+
+
 def export_all_methods(pipe) -> dict:
     """Write representatives/representative_frames/<METHOD>/ for every family.
 
@@ -100,20 +159,7 @@ def export_all_methods(pipe) -> dict:
     write_centroid = bool(
         pipe.cfg["representatives"].get("nearest_to_centroid", True))
 
-    selected_k = pipe.cfg["clustering"].get("selected_k")
-    chosen = _best_per_family(pipe.sols, pipe.ranked, selected_k)
-    # GROMOS/Daura participates only in the GROMACS benchmark, but it is a
-    # clustering method too: export its closest usable cutoff solution.
-    for sol in (pipe.bench_results or {}).get("solutions", []) or []:
-        if sol.labels.size == 0 or sol.error or sol.n_clusters < 2:
-            continue
-        key = "gromos"
-        cur = chosen.get(key)
-        better = (cur is None or
-                  abs(sol.n_clusters - (selected_k or sol.n_clusters)) <
-                  abs(cur[1].n_clusters - (selected_k or sol.n_clusters)))
-        if better:
-            chosen[key] = (None, sol)
+    chosen, _ = collect_method_candidates(pipe)
     summary: dict = {"families": {}, "skipped": {},
                     "recommendation": None}
     present_families = {_base(s.family) for s in pipe.sols}

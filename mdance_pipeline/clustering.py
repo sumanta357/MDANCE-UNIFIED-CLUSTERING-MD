@@ -435,12 +435,21 @@ def run_all(X, D, N_atoms, cfg, logger) -> list[Solution]:
     k_min = int(cl.get("k_min", 2))
     k_max = min(int(cl.get("k_max", 15)), max(1, n - 1))
     selected_k = cl.get("selected_k")
-    if selected_k is not None:
-        selected_k = max(2, min(int(selected_k), max(2, n - 1)))
-        k_range = [selected_k]
-        logger.info("---- K-based methods run at the automatically selected "
-                    "K=%d (NANI / Divine / HELM / Agglomerative) ----",
-                    selected_k)
+    k_map = cl.get("selected_k_map") or {}
+
+    def _k_for(family: str) -> int:
+        if family in k_map:
+            return max(2, min(int(k_map[family]), max(2, n - 1)))
+        if selected_k is not None:
+            return max(2, min(int(selected_k), max(2, n - 1)))
+        return max(k_min, 2)
+
+    if selected_k is not None or k_map:
+        k_range = [selected_k] if selected_k is not None else None
+        logger.info("---- K-based methods use automatic K: "
+                    "%s (%s) ----",
+                    (k_map or selected_k),
+                    "per method" if k_map else "shared")
     else:
         k_range = list(range(max(1, k_min), k_max + 1))
         logger.info("---- MDANCE-native clustering sweep (k in %s) ----",
@@ -449,9 +458,14 @@ def run_all(X, D, N_atoms, cfg, logger) -> list[Solution]:
     D_ok = D is not None
     sols: list[Solution] = []
 
+    nani_ks = k_range if k_range is not None else [_k_for("nani")]
+    divine_ks = k_range if k_range is not None else [_k_for("divine")]
+    helm_ks = k_range if k_range is not None else [_k_for("helm")]
+    agglom_ks = k_range if k_range is not None else [_k_for("agglom")]
+
     # --- NANI k-means (native) ---
     for init_type in cl.get("nani_init_types", ["strat_all"]):
-        for k in k_range:
+        for k in nani_ks:
             sol = run_nani(X, N_atoms, k, init_type,
                            percentage=int(cl.get("nani_percentage", 10)),
                            seed=seed)
@@ -468,7 +482,7 @@ def run_all(X, D, N_atoms, cfg, logger) -> list[Solution]:
             else:
                 init_types = ["comp_sim"]
             for init_type in init_types:
-                for k in k_range:
+                for k in divine_ks:
                     sol = run_divine(X, N_atoms, k, split=split,
                                      anchors=anchors, init_type=init_type,
                                      refine=bool(cl.get("divine_refine", True)))
@@ -510,10 +524,11 @@ def run_all(X, D, N_atoms, cfg, logger) -> list[Solution]:
     # --- HELM (native; refines a coarse k-means partition) ---
     if cl.get("helm_enabled", True) and n <= int(cl.get("helm_max_frames", 2000)) and D_ok:
         init_k = max(int(cl.get("helm_initial_k", 10)),
-                     max(k_range) + 1, selected_k or 0)
+                     (max(k_range) if k_range else max(helm_ks)) + 1,
+                     selected_k or 0)
         base = _initial_partition(X, init_k, seed=seed)
         for scheme in [cl.get("helm_merge_schema", "intra")]:
-            for k in k_range:
+            for k in helm_ks:
                 if k > len(np.unique(base)):
                     continue
                 sol = run_helm(X, N_atoms, k, base,
@@ -529,7 +544,7 @@ def run_all(X, D, N_atoms, cfg, logger) -> list[Solution]:
             # 'ward_on_coords' is the config label for Ward fitted on
             # coordinates (Ward cannot use a precomputed matrix)
             linkage_arg = "ward" if linkage == "ward_on_coords" else linkage
-            for k in k_range:
+            for k in agglom_ks:
                 sol = run_agglomerative(X, D, k, linkage=linkage_arg)
                 if sol.error:
                     logger.warning("skip %s: %s", sol.name, sol.error)

@@ -42,6 +42,30 @@ def test_dispersion_ignores_noise_and_is_not_euclidean_inertia():
     assert np.isclose(res, euclid_inertia / (2.0 * n_atoms))
 
 
+def test_per_method_k_runs_and_returns_map(tmp_path):
+    """Per-method elbow scan produces an independent K per method."""
+    import copy
+
+    from mdance_pipeline.config import DEFAULT_CONFIG
+    from mdance_pipeline.features import msd_pairwise_chunked
+    from mdance_pipeline.k_selection import run_per_method
+
+    rng = np.random.default_rng(3)
+    X = np.vstack([rng.normal(0.0, 0.3, (15, 24)),
+                   rng.normal(1.2, 0.3, (15, 24))])
+    D = msd_pairwise_chunked(X, 8, dtype=np.float64)
+    cfg = copy.deepcopy(DEFAULT_CONFIG)
+    cfg["k_selection"].update({"k_min": 2, "k_max": 4, "stability_repeats": 1,
+                               "per_method_families": ["nani", "agglom"]})
+    rep = run_per_method(X, D, 8, cfg, str(tmp_path / "ks"))
+    assert set(rep["per_method"]) == {"nani", "agglom"}
+    for info in rep["per_method"].values():
+        assert 2 <= info["selected_k"] <= 4
+        assert info["metrics"]
+    assert (tmp_path / "ks" / "k_selection_per_method.csv").is_file()
+    assert (tmp_path / "ks" / "k_selection_per_method.json").is_file()
+
+
 def test_elbow_detection_finds_knee_and_flags_ambiguity():
     ks = [2, 3, 4, 5, 6, 7, 8]
     knee_pos, algo, ambiguous = detect_elbow(

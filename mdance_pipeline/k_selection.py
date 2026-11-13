@@ -286,7 +286,114 @@ def run(X, D, n_atoms, cfg, out_dir, logger=None) -> dict:
     return report
 
 
-def _plot(rows, elbow_pos, selected, out_dir, cfg, logger):
+def _method_labels(X, D, k, cfg, seed, n_atoms, family):
+    """Run one K-based method at K (used only for per-method elbow scans)."""
+    from mdance_pipeline import clustering as cl
+
+    if family == "nani":
+        sol = cl.run_nani(X, n_atoms, int(k),
+                          cfg["k_selection"].get("nani_init_type",
+                                                 "k-means++"),
+                          percentage=int(cfg["clustering"].get(
+                              "nani_percentage", 10)), seed=seed)
+    elif family == "divine":
+        sol = cl.run_divine(
+            X, n_atoms, int(k),
+            split=(cfg["clustering"].get("divine_splits") or
+                   ["weighted_MSD"])[0],
+            anchors=(cfg["clustering"].get("divine_anchors") or ["nani"])[0],
+            refine=bool(cfg["clustering"].get("divine_refine", True)))
+    elif family == "helm":
+        base = cl._initial_partition(
+            X, max(int(k) + 1, int(cfg["clustering"].get(
+                "helm_initial_k", 10))), seed=seed)
+        sol = cl.run_helm(X, n_atoms, int(k), base,
+                          merge_scheme=cfg["clustering"].get(
+                              "helm_merge_schema", "intra"))
+    elif family == "agglom":
+        sol = cl.run_agglomerative(X, D, int(k), linkage="average")
+    else:
+        raise ValueError(f"unsupported family for per-method K: {family}")
+    if sol.error or sol.labels.size == 0:
+        raise RuntimeError(f"{family} K={k} failed: {sol.error}")
+    return sol.labels, sol.name
+
+
+def run_per_method(X, D, n_atoms, cfg, out_dir, logger=None) -> dict:
+    """Independent elbow scan for each K-based method (optional).
+
+    Enabled with ``k_selection.per_method: true``. Each method is clustered at
+    every K in the scan range, its own dispersion curve is built from those
+    partitions, and the elbow + supporting metrics are evaluated per method.
+    This costs one full K sweep per method, so it is off by default.
+    """
+    ks_cfg = cfg.get("k_selection", {})
+    cl = cfg.get("clustering", {})
+    low = max(2, int(ks_cfg.get("k_min", cl.get("k_min", 2))))
+    high = min(int(ks_cfg.get("k_max", cl.get("k_max", 15))),
+               int(ks_cfg.get("max_allowed_k", 20)), X.shape[0] - 1)
+    if high < low:
+        raise ValueError(f"No valid per-method K range: {low}..{high}")
+    seed = int(cfg.get("system", {}).get("seed", 42))
+    os.makedirs(out_dir, exist_ok=True)
+    report: dict = {"per_method": {}, "k_min": low, "k_max": high,
+                    "dispersion_definition": DISPERSION_DEFINITION}
+    for family in ks_cfg.get("per_method_families",
+                             ["nani", "divine", "helm", "agglom"]):
+        rows = []
+        for k in range(low, high + 1):
+            try:
+                labels, name = _method_labels(X, D, k, cfg, seed, n_atoms,
+                                              family)
+            except Exception as exc:
+                if logger:
+                    logger.warning("per-method K: %s K=%d failed: %s",
+                                   family, k, exc)
+                continue
+            rows.append({"k": k, "dispersion":
+                         within_cluster_dispersion(D, labels),
+                         "solution": name,
+                         **_metrics_for(X, D, labels, cfg, seed + k)})
+        if len(rows) < 3:
+            if logger:
+                logger.warning("per-method K: %s has too few valid K values",
+                               family)
+            continue
+        elbow_pos, elbow_algo, ambiguous = detect_elbow(
+            [r["k"] for r in rows], [r["dispersion"] for r in rows])
+        _rank_support(rows)
+        selected = _select(rows, elbow_pos, ambiguous)
+        report["per_method"][family] = {
+            "selected_k": int(selected),
+            "elbow_k": (int(rows[elbow_pos]["k"])
+                        if elbow_pos is not None else None),
+            "elbow_algorithm": elbow_algo,
+            "elbow_ambiguous": bool(ambiguous),
+            "metrics": rows,
+        }
+        _plot(rows, elbow_pos, selected, out_dir, cfg, logger,
+              name=f"k_selection_elbow_{family}.png",
+              title=f"Elbow K selection - {family}")
+        if logger:
+            logger.info("  per-method K %-8s -> K=%d (elbow=%s, ambiguous=%s)",
+                        family, selected, report["per_method"][family]
+                        ["elbow_k"], ambiguous)
+    with open(os.path.join(out_dir, "k_selection_per_method.json"), "w") as fh:
+        json.dump(report, fh, indent=2)
+    with open(os.path.join(out_dir, "k_selection_per_method.csv"), "w",
+              newline="") as fh:
+        wr = csv.writer(fh)
+        wr.writerow(["method", "selected_k", "elbow_k", "elbow_algorithm",
+                     "elbow_ambiguous"])
+        for fam, info in report["per_method"].items():
+            wr.writerow([fam, info["selected_k"], info["elbow_k"],
+                         info["elbow_algorithm"], info["elbow_ambiguous"]])
+    return report
+
+
+def _plot(rows, elbow_pos, selected, out_dir, cfg, logger, name=
+          "k_selection_elbow.png", title="Automatic K selection "
+          "(Elbow / Kneedle)"):
     try:
         import matplotlib
         matplotlib.use("Agg")
@@ -306,10 +413,10 @@ def _plot(rows, elbow_pos, selected, out_dir, cfg, logger):
                label=f"selected K={selected}")
     ax.set_xlabel("K (clusters)")
     ax.set_ylabel("within-cluster MDANCE-MSD dispersion")
-    ax.set_title("Automatic K selection (Elbow / Kneedle)")
+    ax.set_title(title)
     ax.grid(alpha=0.25)
     ax.legend(frameon=False)
     fig.tight_layout()
-    fig.savefig(os.path.join(out_dir, "k_selection_elbow.png"),
+    fig.savefig(os.path.join(out_dir, name),
                 dpi=int(cfg.get("system", {}).get("dpi", 150)))
     plt.close(fig)

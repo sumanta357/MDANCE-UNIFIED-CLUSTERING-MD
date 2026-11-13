@@ -5,6 +5,7 @@ selections work) plus a ligand, writes GRO + XTC with MDAnalysis, and runs the
 complete run_mdance.py CLI flow in a temporary directory.
 """
 import copy
+import csv as csvmod
 import os
 import sys
 
@@ -221,6 +222,36 @@ def test_full_pipeline_end_to_end(synth_traj, tmp_path, capsys):
             assert cl["medoid_original_frame"] >= 0
             assert cl["medoid_time_ps"] >= 0
 
+    # --- cross-method pose comparison ------------------------------------
+    pose_csv = os.path.join(str(out_dir), "representatives",
+                            "pose_comparison.csv")
+    assert os.path.isfile(pose_csv)
+    with open(pose_csv) as fh:
+        poses = list(csvmod.DictReader(fh))
+    assert poses, "pose_comparison.csv is empty"
+    pose_methods = {r["method"] for r in poses}
+    assert len(pose_methods) >= 3, (
+        f"poses from only {len(pose_methods)} method(s): {pose_methods}")
+    pose_scores = [float(r["final_score"]) for r in poses]
+    assert pose_scores == sorted(pose_scores, reverse=True)
+    assert all(0 <= s <= 100 for s in pose_scores)
+    # every pose row names the method it came from
+    assert all(r["method"] and r["family"] for r in poses)
+    for rel in ("representatives/POSE_COMPARISON_REPORT.txt",
+                "reports/METHOD_AND_POSE_SUMMARY.txt"):
+        p = os.path.join(str(out_dir), rel)
+        assert os.path.isfile(p) and os.path.getsize(p) > 0
+    with open(os.path.join(str(out_dir), "representatives",
+                           "method_recommendation.txt")) as fh:
+        rec_txt = fh.read()
+    assert "CROSS-METHOD POSE COMPARISON" in rec_txt
+    assert "pose winner method" in rec_txt
+    with open(os.path.join(str(out_dir), "reports",
+                           "METHOD_AND_POSE_SUMMARY.txt")) as fh:
+        summary_txt = fh.read()
+    assert "Best method (validation)" in summary_txt
+    assert "Best pose (all methods)" in summary_txt
+
     # banner printed to stdout
     captured = capsys.readouterr().out
     assert "FINAL BEST REPRESENTATIVE FRAME" in captured
@@ -243,7 +274,6 @@ def test_full_pipeline_end_to_end(synth_traj, tmp_path, capsys):
     assert np.isfinite(u_pdb.atoms.positions).all()
 
     # candidate scores CSV is ranked and finite
-    import csv as csvmod
     with open(os.path.join(str(out_dir), "representatives",
                            "candidate_frame_scores.csv")) as fh:
         rows = list(csvmod.DictReader(fh))

@@ -67,6 +67,18 @@ Disable with `k_selection.enabled: false` (or `--no-auto-k`); K-based methods
 then sweep `clustering.k_min..clustering.k_max` as before. Partitions are never
 reconciled: methods that disagree keep their own labels and populations.
 
+### Per-method K (optional)
+
+`k_selection.per_method: true` runs an **independent elbow scan for each** of
+NANI, Divine, HELM and Agglomerative (`k_selection.per_method_families`): each
+method is clustered at every K in the scan range, its own dispersion curve is
+built from its own partitions, and the same elbow/supporting-metric rule picks
+its K. Results go to `k_selection_per_method.csv` / `.json` and
+`k_selection_elbow_<family>.png`; the per-method K values are logged and used
+in the sweep. Methods whose scan fails (e.g. a method that refuses very small
+K on few frames) fall back to the shared selected K, with a logged warning.
+This costs one full K sweep per method, so it is **off by default**.
+
 ## 2. Representative frames for every method
 
 `representatives.export_all_methods: true` (default) writes, for each method
@@ -95,10 +107,41 @@ method; `method_representatives.json` records the choice and, for methods with
 only degenerate partitions (e.g. eQual returning a single cluster), the reason
 nothing was exported.
 
-## 3. Independent method recommendation
+## 3. Cross-method pose comparison (the final pose)
+
+`scoring.cross_method_poses: true` (default) makes **every method's
+representative poses compete in one ranked table**. For each method the chosen
+solution's clusters contribute their medoid and (when it differs) the frame
+nearest the centroid, giving up to `2 * n_clusters` poses per method:
+
+* `representatives/pose_comparison.csv` — ranked rows with `method`, `family`,
+  `kind`, `method_k`, cluster, population, analysis/original frame, time, the
+  six component scores and `final_score`;
+* `representatives/POSE_COMPARISON_REPORT.txt` — best pose per method plus the
+  overall winner;
+* `representatives/candidate_frames/*.pdb` — one PDB per compared pose, named
+  `score<...>_<METHOD>_cluster<N>_frame<orig>.pdb`;
+* `representatives/BEST_REPRESENTATIVE_FRAME.pdb` and the final banner — the
+  winning pose, **whatever method produced it**.
+
+Each pose is scored inside **its own** method's partition: population,
+representativeness (distance to that cluster's medoid), stability and quality
+typicality all refer to the method that generated the pose. Only the six
+component metrics are min-max normalized across the whole cross-method
+candidate set.
+
+## 4. Independent method recommendation
 
 `representatives/method_recommendation.txt` and
 `representatives/RECOMMENDED_METHOD_FRAME.pdb` give the top
-validation-ranked method and the medoid of its largest cluster. This is
-**separate** from the composite 0–100 frame score, which still produces
-`representatives/BEST_REPRESENTATIVE_FRAME.pdb` and the final banner.
+validation-ranked method and the medoid of its largest cluster, and the same
+file records whether the cross-method pose winner came from that method.
+`reports/METHOD_AND_POSE_SUMMARY.txt` states both answers together:
+
+1. **best method** by cluster validation (ranking in
+   `clustering/clustering_summary.csv`), with its representative structure;
+2. **best pose** by the composite frame score across all methods, with its
+   frame indices, time and score, plus `same method as above: YES/NO`.
+
+The composite frame score remains separate from the cluster-validation
+ranking; both are reported explicitly instead of being conflated.

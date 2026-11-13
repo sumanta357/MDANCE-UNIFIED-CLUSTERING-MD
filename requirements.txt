@@ -2,6 +2,7 @@
 numpy>=1.20
 scipy>=1.6
 scikit-learn>=0.24
+kneed  # Kneedle elbow detection (geometric fallback if unavailable)
 MDAnalysis>=2.0
 mdance==0.4.0
 matplotlib>=3.3
