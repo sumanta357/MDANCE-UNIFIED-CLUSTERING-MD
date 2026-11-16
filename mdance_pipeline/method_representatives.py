@@ -87,6 +87,17 @@ def _best_per_family(sols, ranked, selected_k: int | None = None) -> dict:
     return best
 
 
+def method_slug(name: str) -> str:
+    """Filesystem-safe, readable method label (e.g. 'NANI_comp_sim_k3')."""
+    fam = {"agglom": "AGGLOMERATIVE", "equal": "EQUAL",
+           "mdbirch": "MDBIRCH"}.get(
+               str(name).split("/")[0], str(name).split("/")[0].upper())
+    rest = [p for p in str(name).split("/")[1:] if p]
+    slug = "_".join([fam] + rest)
+    return "".join(ch if (ch.isalnum() or ch in "-_.") else "-"
+                   for ch in slug)
+
+
 def collect_method_candidates(pipe) -> tuple[dict, list[dict]]:
     """All per-method representative frames as scoring candidates.
 
@@ -237,6 +248,23 @@ def export_all_methods(pipe) -> dict:
         log.warning("No representatives for %s: %s", _family_root(key),
                     summary["skipped"][_family_root(key)]["reason"])
 
+    # methods that never produced a solution at all (disabled / too many
+    # frames / failed) are reported too, instead of silently disappearing
+    coverage = getattr(pipe, "method_coverage", {}) or {}
+    present = {_family_root(k) for k in chosen}
+    for fam, info in coverage.items():
+        label = {"agglom": "AGGLOMERATIVE", "equal": "EQUAL"}.get(
+            fam.upper(), fam.upper())
+        if any(label == p for p in present):
+            continue
+        if info.get("status") in ("not_run", "deferred"):
+            summary["skipped"].setdefault(label, {
+                "reason": info.get("reason") or "method not executed",
+                "solutions": [], "cluster_counts": [],
+            })
+            log.warning("No representatives for %s: %s", label,
+                        summary["skipped"][label]["reason"])
+
     # --- independent method recommendation -------------------------------
     top = pipe.ranked[0]
     top_sol = next(s for s in pipe.sols if s.name == top.name)
@@ -250,6 +278,12 @@ def export_all_methods(pipe) -> dict:
             out_pdb = os.path.join(pipe.out_dir, "representatives",
                                    "RECOMMENDED_METHOD_FRAME.pdb")
             reps.write_frame_pdb(pipe.info, frame, out_pdb, logger=log)
+            # self-describing copy: names the method that produced the frame
+            named = os.path.join(
+                pipe.out_dir, "representatives",
+                f"RECOMMENDED_METHOD_FRAME_{method_slug(top.name)}"
+                f"_cluster{cid + 1}_frame{meta['original_frame']}.pdb")
+            reps.write_frame_pdb(pipe.info, frame, named, logger=None)
             summary["recommendation"] = {
                 "method": top.name,
                 "family": top.family,

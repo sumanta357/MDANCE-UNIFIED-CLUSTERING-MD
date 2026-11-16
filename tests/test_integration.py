@@ -6,7 +6,9 @@ complete run_mdance.py CLI flow in a temporary directory.
 """
 import copy
 import csv as csvmod
+import json
 import os
+import re
 import sys
 
 import numpy as np
@@ -252,6 +254,44 @@ def test_full_pipeline_end_to_end(synth_traj, tmp_path, capsys):
     assert "Best method (validation)" in summary_txt
     assert "Best pose (all methods)" in summary_txt
 
+    # --- per-method coverage audit ---------------------------------------
+    cov_path = os.path.join(str(out_dir), "clustering",
+                            "method_coverage.json")
+    assert os.path.isfile(cov_path)
+    with open(cov_path) as fh:
+        cov = json.load(fh)
+    assert set(cov) >= {"nani", "divine", "helm", "equal", "mdbirch",
+                        "agglom", "dbscan", "gromos"}
+    for fam, info in cov.items():
+        assert info["status"] in ("usable", "degenerate", "not_run",
+                                  "deferred")
+        if info["status"] in ("not_run", "degenerate"):
+            assert info["reason"], f"{fam} has no reason for being missing"
+    cov_txt = os.path.join(str(out_dir), "reports", "METHOD_COVERAGE.txt")
+    assert os.path.isfile(cov_txt)
+    with open(cov_txt) as fh:
+        cov_body = fh.read()
+    for label in ("NANI", "DIVINE", "HELM", "eQual", "mdBIRCH",
+                  "Agglomerative", "DBSCAN", "GROMOS"):
+        assert label in cov_body, f"{label} missing from coverage report"
+    # every executed method must be usable on this dataset (no silent gaps)
+    performed = {f for f in cov if cov[f]["status"] == "usable"}
+    assert len(performed) >= 6, f"only {sorted(performed)} produced results"
+
+    # --- final winner file names the method that produced it -------------
+    best_txt = os.path.join(str(out_dir), "reports",
+                            "FINAL_FRAME_SELECTION_REPORT.txt")
+    with open(best_txt) as fh:
+        banner = fh.read()
+    named = re.search(
+        r"representatives/(BEST_REPRESENTATIVE_FRAME_(\S+?)_cluster\d+_frame\d+\.pdb)",
+        banner)
+    assert named, "banner does not reference a method-named winner PDB"
+    assert os.path.isfile(os.path.join(str(out_dir), "representatives",
+                                       named.group(1)))
+    assert re.search(r"BEST_REPRESENTATIVE_FRAME_(NANI|DIVINE|HELM|EQUAL|MDBIRCH|AGGLOMERATIVE|DBSCAN|GROMOS)",
+                     named.group(1)), named.group(1)
+
     # banner printed to stdout
     captured = capsys.readouterr().out
     assert "FINAL BEST REPRESENTATIVE FRAME" in captured
@@ -262,7 +302,6 @@ def test_full_pipeline_end_to_end(synth_traj, tmp_path, capsys):
                            "FINAL_FRAME_SELECTION_REPORT.txt")) as fh:
         report = fh.read()
     assert "Selected Frame ID" in report
-    import re
     score_match = re.search(r"Final Composite Score\s*:\s*([\d.]+) / 100",
                             report)
     assert score_match and 0 <= float(score_match.group(1)) <= 100

@@ -45,18 +45,18 @@ clustering:
   divine_anchors: [nani]
   divine_refine: true
   equal_seed_methods: [greedy, medoid, comp_sim]
-  equal_threshold_quantiles: [0.01, 0.02, 0.05, 0.08, 0.10, 0.15, 0.20, 0.30]
+  equal_threshold_quantiles: [0.001, 0.005, 0.01, 0.02, 0.05, 0.08, 0.10, 0.15, 0.20, 0.30]
   equal_min_samples: 0.05        # eQual low-density rejection (fraction of frames)
-  mdbirch_threshold_quantiles: [0.10, 0.25, 0.40, 0.55, 0.70, 0.85]
+  mdbirch_threshold_quantiles: [0.01, 0.05, 0.10, 0.25, 0.40, 0.55, 0.70, 0.85]
   mdbirch_branching_factor: 50
   helm_enabled: true
   helm_initial_k: 10
   helm_merge_schema: intra
-  helm_max_frames: 2000
+  helm_max_frames: 20000         # raise for very long trajectories (HELM cost grows with frames)
   baselines_enabled: true
   agglomerative_linkages: [average, complete, ward]
   dbscan_min_samples: 5
-  dbscan_eps_quantiles: [0.05, 0.15, 0.30, 0.50]
+  dbscan_eps_quantiles: [0.01, 0.02, 0.05, 0.15, 0.30, 0.50]
 
 benchmark:
   enabled: true

@@ -59,9 +59,11 @@ class Pipeline:
             with utils.timed_step(log, "Phase 3b: automatic K selection (Elbow)"):
                 self._phase_k_selection()
         with utils.timed_step(log, "Phase 4: MDANCE + baseline clustering sweep"):
+            self.method_coverage: dict = {}
             self.sols = clustering.run_all(
                 self.dist["X"], self.dist["D"],
-                self.info["n_atoms_selected"], self.cfg, log)
+                self.info["n_atoms_selected"], self.cfg, log,
+                coverage=self.method_coverage)
         with utils.timed_step(log, "Phase 5: validation & optimal model selection"):
             self._phase_validation()
         if self.cfg["benchmark"].get("enabled", True):
@@ -69,6 +71,12 @@ class Pipeline:
                 self.bench_results = gromacs_bench.benchmark(
                     self.sols, self.dist["D"], self.dist["X"], self.cfg, log,
                     self.info, self.out_dir)
+                self._update_gromos_coverage()
+        else:
+            self.method_coverage["gromos"] = {
+                "status": "not_run", "reason": "benchmark.enabled: false",
+                "solutions": 0, "usable_solutions": 0, "cluster_counts": [],
+                "failed_solutions": 0}
         with utils.timed_step(log, "Phase 7: representative-frame extraction"):
             self._phase_representatives()
         with utils.timed_step(log, "Phases 8-9: composite scoring & sensitivity"):
@@ -78,6 +86,67 @@ class Pipeline:
         with utils.timed_step(log, "Phases 11-12: reports & final banner"):
             self._phase_reports()
         return {"final": self.score_rows[0] if self.score_rows else None}
+
+    # ---------------------------------------------------- method coverage
+    def _update_gromos_coverage(self) -> None:
+        sols = (self.bench_results or {}).get("solutions", []) or []
+        counts = [int(s.n_clusters) for s in sols]
+        usable = [c for c in counts if c >= 2]
+        if not sols:
+            status, reason = "not_run", "no GROMOS benchmark solution"
+        elif usable:
+            status, reason = "usable", ""
+        else:
+            status, reason = "degenerate", "every cutoff gave < 2 clusters"
+        self.method_coverage["gromos"] = {
+            "status": status, "reason": reason, "solutions": len(sols),
+            "usable_solutions": len(usable),
+            "cluster_counts": sorted(set(counts)),
+            "failed_solutions": sum(1 for s in sols if s.error),
+        }
+
+    def _write_method_coverage(self) -> None:
+        """Persist why every method did or did not contribute results."""
+        entries = self.method_coverage or {}
+        with open(os.path.join(self.out_dir, "clustering",
+                               "method_coverage.json"), "w") as fh:
+            json.dump(entries, fh, indent=2)
+        labels = {"nani": "NANI", "divine": "DIVINE", "helm": "HELM",
+                  "agglom": "Agglomerative", "equal": "eQual",
+                  "mdbirch": "mdBIRCH", "dbscan": "DBSCAN",
+                  "gromos": "GROMOS"}
+        lines = ["PER-METHOD COVERAGE (why each method produced results or "
+                 "not)", "=" * 78, ""]
+        for fam, label in labels.items():
+            info = entries.get(fam, {})
+            status = info.get("status", "not_run")
+            counts = info.get("cluster_counts") or []
+            lines.append(f"{label:<16} {status:<11} "
+                         f"solutions {info.get('solutions', 0):<3} "
+                         f"usable {info.get('usable_solutions', 0):<3} "
+                         f"clusters {counts}")
+            if info.get("reason"):
+                lines.append(f"{'':<16} reason: {info['reason']}")
+            if info.get("failed_solutions"):
+                lines.append(f"{'':<16} failed runs: "
+                             f"{info['failed_solutions']}")
+        used = [labels.get(f, f) for f, i in entries.items()
+                if i.get("status") in ("usable", "degenerate")]
+        missing = [labels.get(f, f) for f, i in entries.items()
+                   if i.get("status") not in ("usable", "degenerate")]
+        lines += ["",
+                  f"Methods evaluated : {', '.join(used) or 'none'}",
+                  f"Methods not run   : {', '.join(missing) or 'none'}",
+                  "",
+                  "Each evaluated method exports representative frames for "
+                  "every cluster",
+                  "it produced (>= 2 clusters); degenerate partitions are "
+                  "listed in",
+                  "representatives/method_representatives.json under ",
+                  "'skipped'."]
+        with open(os.path.join(self.out_dir, "reports",
+                               "METHOD_COVERAGE.txt"), "w") as fh:
+            fh.write("\n".join(lines))
 
     # ------------------------------------------------------------ phase 2
     def _phase_preprocess(self) -> dict:
@@ -432,7 +501,9 @@ class Pipeline:
                   f"  time            : {top['time_ps'] / 1000:.3f} ns",
                   f"  composite score : {top['final_score']:.2f} / 100",
                   "  structure       : representatives/"
-                  "BEST_REPRESENTATIVE_FRAME.pdb"]
+                  f"BEST_REPRESENTATIVE_FRAME_{method_reps.method_slug(top.get('source_method', ''))}.pdb",
+                  "                    (stable alias: "
+                  "BEST_REPRESENTATIVE_FRAME.pdb)"]
         with open(os.path.join(reps_dir, "POSE_COMPARISON_REPORT.txt"),
                   "w") as fh:
             fh.write("\n".join(lines))
@@ -500,8 +571,10 @@ class Pipeline:
                 f"  cluster               : {top['cluster_id'] + 1}"
                 f" (population {top['cluster_population']})",
                 f"  composite pose score  : {top['final_score']:.2f} / 100",
-                f"  structure             : "
-                "representatives/BEST_REPRESENTATIVE_FRAME.pdb",
+                f"  structure             : representatives/"
+                f"BEST_REPRESENTATIVE_FRAME_{method_reps.method_slug(top.get('source_method', ''))}"
+                f"_cluster{top['cluster_id'] + 1}"
+                f"_frame{top['original_frame']}.pdb",
                 f"  same method as above  : {'YES' if agree else 'NO'}",
                 "", "Details:",
                 "  representatives/pose_comparison.csv",
@@ -545,11 +618,24 @@ class Pipeline:
     # ------------------------------------------------------------ phase 11-12
     def _phase_reports(self) -> None:
         log = self.logger
+        self._write_method_coverage()
         best_row = self.score_rows[0]
         reps_dir = os.path.join(self.out_dir, "representatives")
+        # method-named, self-describing winner file + stable alias
+        best_slug = method_reps.method_slug(
+            best_row.get("source_method") or self.best_metrics.name)
+        best_named = (f"BEST_REPRESENTATIVE_FRAME_{best_slug}"
+                      f"_cluster{best_row['cluster_id'] + 1}"
+                      f"_frame{best_row['original_frame']}.pdb")
+        best_row["structure_file"] = os.path.join("representatives",
+                                                  best_named)
         reps.write_frame_pdb(
             self.info, best_row["analysis_frame"],
-            os.path.join(reps_dir, "BEST_REPRESENTATIVE_FRAME.pdb"), logger=log)
+            os.path.join(reps_dir, best_named), logger=log)
+        reps.write_frame_pdb(
+            self.info, best_row["analysis_frame"],
+            os.path.join(reps_dir, "BEST_REPRESENTATIVE_FRAME.pdb"),
+            logger=None)
         rows = [[s.name, s.native, s.n_clusters, s.time_s, s.mem_mb,
                  (s.error or "OK")[:80]] for s in self.sols]
         utils.write_csv(os.path.join(self.out_dir, "reports",

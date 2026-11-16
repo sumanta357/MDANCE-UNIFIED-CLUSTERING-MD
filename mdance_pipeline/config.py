@@ -69,7 +69,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "helm_initial_k": 10,        # HELM refines this initial coarse partition
         "helm_merge_schema": "intra",  # {'intra','inter','half'}
         "helm_link": None,
-        "helm_max_frames": 2000,
+        "helm_max_frames": 20000,
         "baselines_enabled": True,   # sklearn agglomerative / DBSCAN / gromos
         "agglomerative_linkages": ["average", "complete", "ward_on_coords"],
         "dbscan_min_samples": 5,

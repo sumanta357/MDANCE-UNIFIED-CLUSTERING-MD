@@ -18,6 +18,13 @@ behaviour and are never forced onto that K. Results:
 exported (medoid + nearest-to-centroid, actual trajectory frames with original
 frame index and simulation time) under
 `representatives/representative_frames/<METHOD>/`.
+* **Explicit method coverage** — `reports/METHOD_COVERAGE.txt` +
+`clustering/method_coverage.json` list, for every method, whether it produced
+usable partitions and why not when it did not (disabled, too many frames,
+threshold sweep gave <2 clusters, failed runs). Threshold sweeps (eQual,
+mdBIRCH, DBSCAN) also test thresholds at the nearest-neighbour distance scale,
+so they no longer collapse to one cluster / all-noise, and the HELM frame cap
+is 20 000 (configurable).
 * **Cross-method pose comparison** — all those poses compete in one ranked
 table (`representatives/pose_comparison.csv`), each scored inside its own
 method's partition, so `BEST_REPRESENTATIVE_FRAME.pdb` can come from **any**
@@ -98,13 +105,15 @@ MDANCE_Analysis/
 │                        cluster_NNN_centroid.pdb, representatives.csv),
 │                    method_recommendation.txt, RECOMMENDED_METHOD_FRAME.pdb,
 │                    method_representatives.json,
-│                    pose_comparison.csv, POSE_COMPARISON_REPORT.txt}
+│                    pose_comparison.csv, POSE_COMPARISON_REPORT.txt,
+│                    BEST_REPRESENTATIVE_FRAME_<METHOD>_cluster<N>_frame<orig>.pdb,
+│                    RECOMMENDED_METHOD_FRAME_<METHOD>_<params>_cluster<N>_frame<orig>.pdb}
 ├── benchmarking/{mdance_vs_gromacs.csv, benchmarking_report.txt}
 ├── scoring/{scoring_metrics.csv, scoring_weights.yaml, sensitivity_analysis.csv}
 ├── plots/  *.png
 ├── reports/{complete_analysis_report.txt, clustering_summary.{csv,json},
 │            FINAL_FRAME_SELECTION_REPORT.txt,
-│            METHOD_AND_POSE_SUMMARY.txt}
+│            METHOD_AND_POSE_SUMMARY.txt, METHOD_COVERAGE.txt}
 ├── logs/analysis.log
 requirements.txt, environment.yml, README.md
 ```
@@ -151,7 +160,11 @@ requirements.txt, environment.yml, README.md
    each pose evaluated inside its own method's partition; ligand metrics are
    optional (weights renormalize). The winner can come from any method, and
    `reports/METHOD_AND_POSE_SUMMARY.txt` states the best method and the best
-   pose separately.
+   pose separately. Winner files are method-named, e.g.
+   `BEST_REPRESENTATIVE_FRAME_NANI_comp_sim_k3_cluster2_frame13.pdb`
+   (`BEST_REPRESENTATIVE_FRAME.pdb` remains as a stable alias), and the
+   recommended-method frame is
+   `RECOMMENDED_METHOD_FRAME_<METHOD>_<params>_cluster<N>_frame<orig>.pdb`.
 9. **Sensitivity** — Dirichlet weight perturbations; winner frequency; most
    robust frame reported.
 10. **Visualization** — population, silhouette, RMSD, distance heatmap, PCA,

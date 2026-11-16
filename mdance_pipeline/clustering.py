@@ -420,7 +420,28 @@ def _gromos_subset(D, subset, cutoff):
 # Sweep orchestration (pipeline-added)
 # --------------------------------------------------------------------------
 
-def run_all(X, D, N_atoms, cfg, logger) -> list[Solution]:
+def nn_distance_thresholds(D: np.ndarray) -> list[float]:
+    """Thresholds at the local distance scale (per-frame nearest neighbour).
+
+    Quantiles of the *pairwise* distance distribution can sit far away from
+    the scale at which neighbourhoods actually exist, which makes eQual and
+    DBSCAN collapse to one cluster / all-noise on trajectories with a few
+    well-separated states. These values are always inside the populated
+    neighbourhood range, so the sweeps cross a usable threshold region.
+    """
+    if D is None or D.shape[0] < 3:
+        return []
+    Dc = np.array(D, dtype=float, copy=True)
+    np.fill_diagonal(Dc, np.inf)
+    nn = Dc.min(axis=1)
+    nn = nn[np.isfinite(nn)]
+    if nn.size == 0:
+        return []
+    return sorted({float(np.quantile(nn, q)) for q in (0.25, 0.5, 0.75, 1.0)})
+
+
+def run_all(X, D, N_atoms, cfg, logger, coverage: dict | None = None
+            ) -> list[Solution]:
     """Run every compatible method per configuration; skip with reasons.
 
     K-based methods (NANI, Divine, HELM, Agglomerative) run at the single K
@@ -457,6 +478,22 @@ def run_all(X, D, N_atoms, cfg, logger) -> list[Solution]:
 
     D_ok = D is not None
     sols: list[Solution] = []
+    not_run: dict[str, str] = {}
+    helm_cap = int(cl.get("helm_max_frames", 20000))
+    if not D_ok:
+        for fam in ("equal", "mdbirch", "dbscan", "agglom", "helm",
+                    "gromos"):
+            not_run[fam] = "distance matrix unavailable"
+    if not cl.get("helm_enabled", True):
+        not_run["helm"] = "helm_enabled: false"
+    elif D_ok and n > helm_cap:
+        not_run["helm"] = (f"n_frames {n} > helm_max_frames {helm_cap} "
+                           f"(raise clustering.helm_max_frames to enable)")
+        logger.warning("HELM not run: %s", not_run["helm"])
+    if not cl.get("baselines_enabled", True):
+        for fam in ("agglom", "dbscan"):
+            not_run[fam] = "baselines_enabled: false"
+        logger.warning("Agglomerative/DBSCAN not run: baselines disabled")
 
     nani_ks = k_range if k_range is not None else [_k_for("nani")]
     divine_ks = k_range if k_range is not None else [_k_for("divine")]
@@ -495,8 +532,14 @@ def run_all(X, D, N_atoms, cfg, logger) -> list[Solution]:
     if D_ok:
         condensed = upper_desc_vals(D)
         qs = cl.get("equal_threshold_quantiles",
-                    [0.01, 0.02, 0.05, 0.08, 0.10, 0.15, 0.20, 0.30])
+                    [0.001, 0.005, 0.01, 0.02, 0.05, 0.08, 0.10, 0.15,
+                     0.20, 0.30])
         thresholds = [float(np.quantile(condensed, q)) for q in qs]
+        # thresholds on the nearest-neighbour scale, so the sweep always enters
+        # the region where >= 2 clusters can exist
+        nn = nn_distance_thresholds(D)
+        thresholds += [v for f in nn for v in (f, 2.0 * f) if v > 0]
+        thresholds = sorted(set(thr for thr in thresholds if thr > 0))
     else:
         thresholds = []
     equal_min_samples = cl.get("equal_min_samples", 0.05)
@@ -511,8 +554,10 @@ def run_all(X, D, N_atoms, cfg, logger) -> list[Solution]:
 
     # --- mdBirch (native; threshold sweep) ---
     if D_ok:
-        qs = cl.get("mdbirch_threshold_quantiles", [0.1, 0.25, 0.4, 0.55, 0.7, 0.85])
+        qs = cl.get("mdbirch_threshold_quantiles",
+                    [0.01, 0.05, 0.10, 0.25, 0.40, 0.55, 0.70, 0.85])
         thresholds = [float(np.quantile(upper_desc_vals(D), q)) for q in qs]
+        thresholds = sorted(set(t for t in thresholds if t > 0))
         bf = int(cl.get("mdbirch_branching_factor", 50))
         for thr in thresholds:
             sol = run_mdbirch(X, thr, branching_factor=bf)
@@ -522,7 +567,7 @@ def run_all(X, D, N_atoms, cfg, logger) -> list[Solution]:
                 sols.append(sol)
 
     # --- HELM (native; refines a coarse k-means partition) ---
-    if cl.get("helm_enabled", True) and n <= int(cl.get("helm_max_frames", 2000)) and D_ok:
+    if cl.get("helm_enabled", True) and n <= helm_cap and D_ok:
         init_k = max(int(cl.get("helm_initial_k", 10)),
                      (max(k_range) if k_range else max(helm_ks)) + 1,
                      selected_k or 0)
@@ -552,8 +597,12 @@ def run_all(X, D, N_atoms, cfg, logger) -> list[Solution]:
                     sols.append(sol)
         condensed = upper_desc_vals(D)
         min_samples = int(cl.get("dbscan_min_samples", 5))
-        for q in cl.get("dbscan_eps_quantiles", [0.05, 0.15, 0.3, 0.5]):
-            eps = float(np.quantile(condensed, q))
+        eps_list = [float(np.quantile(condensed, q))
+                    for q in cl.get("dbscan_eps_quantiles",
+                                    [0.01, 0.02, 0.05, 0.15, 0.30, 0.50])]
+        # nearest-neighbour scale: eps that actually captures local density
+        eps_list += nn_distance_thresholds(D)
+        for eps in sorted(set(e for e in eps_list if e > 0)):
             sol = run_dbscan(D, eps, min_samples=min_samples)
             if sol.error:
                 logger.warning("skip %s: %s", sol.name, sol.error)
@@ -561,6 +610,39 @@ def run_all(X, D, N_atoms, cfg, logger) -> list[Solution]:
                 sols.append(sol)
 
     logger.info("Executed %d clustering solutions.", len(sols))
+    if coverage is not None:
+        coverage.clear()
+        by_family: dict[str, list] = {}
+        for s in sols:
+            by_family.setdefault(str(s.family).split("/")[0], []).append(s)
+        for fam in ("nani", "divine", "helm", "equal", "mdbirch",
+                    "agglom", "dbscan"):
+            ss = by_family.get(fam, [])
+            counts = [int(s.n_clusters) for s in ss]
+            usable = [c for c in counts if c >= 2]
+            reason = not_run.get(fam)
+            if reason is None and not ss:
+                reason = "no solution produced"
+            coverage[fam] = {
+                "status": ("usable" if usable
+                           else ("degenerate" if ss else "not_run")),
+                "reason": reason or ("" if usable else
+                                     "every solution had < 2 clusters"),
+                "solutions": len(ss),
+                "usable_solutions": len(usable),
+                "cluster_counts": sorted(set(counts)),
+                "failed_solutions": sum(1 for s in ss if s.error),
+            }
+        coverage["gromos"] = {
+            "status": "deferred",
+            "reason": "evaluated in the GROMOS benchmarking sweep",
+            "solutions": 0, "usable_solutions": 0, "cluster_counts": [],
+            "failed_solutions": 0,
+        }
+        for fam, info in coverage.items():
+            logger.info("  method coverage %-9s %-10s %s", fam,
+                        info["status"],
+                        info["reason"] or f"clusters {info['cluster_counts']}")
     return sols
 
 

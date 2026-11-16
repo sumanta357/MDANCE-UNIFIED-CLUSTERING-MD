@@ -107,6 +107,34 @@ method; `method_representatives.json` records the choice and, for methods with
 only degenerate partitions (e.g. eQual returning a single cluster), the reason
 nothing was exported.
 
+## 2b. Method coverage: why a method produced nothing
+
+Every run writes `clustering/method_coverage.json` and
+`reports/METHOD_COVERAGE.txt`. For each of NANI, DIVINE, HELM, eQual, mdBIRCH,
+Agglomerative, DBSCAN and GROMOS they record `status` (`usable`, `degenerate`,
+`not_run`, `deferred`), the number of solutions, how many are usable, the set of
+cluster counts produced, failed-run count, and a human-readable `reason`. The
+same reasons appear in the log (`method coverage <name> ...`) and in
+`representatives/method_representatives.json -> skipped`, so a method can no
+longer disappear silently.
+
+To keep the threshold/density methods from degenerating on real trajectories:
+
+* eQual and DBSCAN sweeps additionally test thresholds **at the
+  nearest-neighbour distance scale** (`nn_distance_thresholds`: quantiles of
+  each frame's nearest-neighbour MSD, and 2× for eQual), which is the range
+  where neighbourhoods actually exist — pairwise-distance quantiles alone can
+  sit far outside it and yield one cluster or all-noise;
+* default eQual/mdBIRCH/DBSCAN quantile lists were extended toward small
+  values; GROMOS keeps its benchmark sweep;
+* HELM's frame cap is `clustering.helm_max_frames` = 20 000 (was 2 000, which
+  silently disabled HELM for long trajectories), and exceeding it is logged and
+  reported as `not_run` with the reason.
+
+These changes affect only *whether a method gets evaluated*. A method whose
+best partition still has fewer than 2 clusters is simply not exported (there is
+no second state to represent) and is reported as `degenerate`.
+
 ## 3. Cross-method pose comparison (the final pose)
 
 `scoring.cross_method_poses: true` (default) makes **every method's
@@ -123,6 +151,11 @@ nearest the centroid, giving up to `2 * n_clusters` poses per method:
   `score<...>_<METHOD>_cluster<N>_frame<orig>.pdb`;
 * `representatives/BEST_REPRESENTATIVE_FRAME.pdb` and the final banner — the
   winning pose, **whatever method produced it**.
+
+Output filenames state the method that produced them:
+`BEST_REPRESENTATIVE_FRAME_<METHOD>_cluster<N>_frame<orig>.pdb` (with
+`BEST_REPRESENTATIVE_FRAME.pdb` kept as a stable alias) and
+`RECOMMENDED_METHOD_FRAME_<METHOD>_<params>_cluster<N>_frame<orig>.pdb`.
 
 Each pose is scored inside **its own** method's partition: population,
 representativeness (distance to that cluster's medoid), stability and quality
