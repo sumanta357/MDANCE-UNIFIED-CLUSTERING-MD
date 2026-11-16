@@ -677,9 +677,10 @@ class Pipeline:
         explanations = [
             ("Representativeness", "relative position of the candidate inside "
              "its cluster toward the cluster medoid (1 = medoid itself)"),
-            ("Population", "sqrt-compressed cluster population fraction; "
-             "populated conformational states are rewarded while the largest "
-             "cluster is not automatically preferred"),
+            ("Population", "cluster population fraction (min-max normalised "
+             "across candidates); populated conformational states are "
+             "rewarded, and a one-frame cluster is capped so it cannot win "
+             "on population alone"),
             ("Stability", "0.5 * temporal consistency (decay of the mean MSD "
              "to the +/-5 surrounding frames) + 0.5 * typicality of the "
              "frame's RMSD-to-reference inside its cluster"),

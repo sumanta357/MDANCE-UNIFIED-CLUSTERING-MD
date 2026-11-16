@@ -66,68 +66,123 @@ def labels_from_ids(ids_list, n: int) -> np.ndarray:
 # MDANCE-native methods
 # --------------------------------------------------------------------------
 
+def sampling_percentage(n_frames: int, k: int, base: int = 10) -> int:
+    """Smallest sampling percentage that yields at least ``k`` initiators.
+
+    MDANCE's NANI/DIVINE initializers sample ``floor(n * percentage / 100)``
+    frames, so a small trajectory at the default 10% can produce fewer
+    initiators than clusters and the method is skipped. Percentage is capped
+    at 100; ``n_frames - 1`` is the largest usable K.
+    """
+    if n_frames <= 1:
+        return 100
+    needed = int(np.ceil(100.0 * max(int(k), 2) / int(n_frames)))
+    return int(min(100, max(int(base), needed, 1)))
+
+
 def run_nani(X, N_atoms, k, init_type, percentage=10, seed=42) -> Solution:
-    """NANI k-means (MDANCE-native `KmeansNANI.execute_kmeans_all`)."""
+    """NANI k-means (MDANCE-native `KmeansNANI.execute_kmeans_all`).
+
+    When a sampling-based initializer cannot produce ``k`` initiators on a
+    short trajectory, the percentage is raised automatically instead of
+    dropping the method.
+    """
     import numpy as _np
     m0, t0 = _peak(), time.time()
+    n_frames = X.shape[0]
+    pcts = sorted({max(1, int(percentage)),
+                   sampling_percentage(n_frames, k, percentage)})
+    if init_type not in ("k-means++", "vanilla_kmeans++", "random"):
+        pcts += [p for p in (60, 100) if p > pcts[-1]]
 
-    def _rerun(subset: _np.ndarray) -> _np.ndarray:
-        model = md_nani.KmeansNANI(data=X[subset], n_clusters=k, metric="MSD",
-                                   N_atoms=N_atoms, init_type=init_type,
-                                   percentage=percentage)
-        labs, _, _ = model.execute_kmeans_all()
-        return _np.asarray(labs, dtype=int)
+    def _make(pct):
+        def _rerun(subset: _np.ndarray) -> _np.ndarray:
+            model = md_nani.KmeansNANI(data=X[subset], n_clusters=k,
+                                       metric="MSD", N_atoms=N_atoms,
+                                       init_type=init_type,
+                                       percentage=pct)
+            labs, _, _ = model.execute_kmeans_all()
+            return _np.asarray(labs, dtype=int)
+        return _rerun
 
-    try:
-        model = md_nani.KmeansNANI(data=X, n_clusters=k, metric="MSD",
-                                   N_atoms=N_atoms, init_type=init_type,
-                                   percentage=percentage)
-        labels, centers, n_iter = model.execute_kmeans_all()
-        labels = np.asarray(labels, dtype=int)
-        return Solution(
-            name=f"nani/{init_type}/k{k}", family=f"nani/{init_type}",
-            params={"k": k, "init_type": init_type, "percentage": percentage},
-            labels=labels, n_clusters=int(len(np.unique(labels))),
-            time_s=time.time() - t0, mem_mb=_peak() - m0, native=True,
-            rerun=_rerun)
-    except Exception as exc:
-        return Solution(name=f"nani/{init_type}/k{k}", family=f"nani/{init_type}",
-                        params={"k": k}, labels=np.array([], int), n_clusters=0,
-                        time_s=time.time() - t0, mem_mb=0.0, native=True,
-                        error=str(exc))
+    last_exc: Exception | None = None
+    for pct in pcts:
+        try:
+            model = md_nani.KmeansNANI(data=X, n_clusters=k, metric="MSD",
+                                       N_atoms=N_atoms, init_type=init_type,
+                                       percentage=pct)
+            labels, centers, n_iter = model.execute_kmeans_all()
+            labels = np.asarray(labels, dtype=int)
+            return Solution(
+                name=f"nani/{init_type}/k{k}", family=f"nani/{init_type}",
+                params={"k": k, "init_type": init_type, "percentage": pct},
+                labels=labels, n_clusters=int(len(np.unique(labels))),
+                time_s=time.time() - t0, mem_mb=_peak() - m0, native=True,
+                rerun=_make(pct))
+        except Exception as exc:  # retry only sampling-shortage errors
+            last_exc = exc
+            msg = str(exc)
+            if ("initiators is less than" not in msg
+                    and "Percentage is too low" not in msg):
+                break
+    return Solution(name=f"nani/{init_type}/k{k}", family=f"nani/{init_type}",
+                    params={"k": k}, labels=np.array([], int), n_clusters=0,
+                    time_s=time.time() - t0, mem_mb=0.0, native=True,
+                    error=str(last_exc))
 
 
 def run_divine(X, N_atoms, k, split="weighted_MSD", anchors="nani",
-               init_type="strat_all", refine=True) -> Solution:
-    """Divisive clustering (MDANCE-native `Divine.run`, metric hard-coded MSD)."""
+               init_type="strat_all", refine=True, percentage=10) -> Solution:
+    """Divisive clustering (MDANCE-native `Divine.run`, metric hard-coded MSD).
+
+    DIVINE's NANI anchor selection samples the same way as NANI, so the
+    percentage is scaled to the frame count to keep K attainable.
+    """
     m0, t0 = _peak(), time.time()
+    if anchors == "nani":
+        base = sampling_percentage(X.shape[0], k, percentage)
+        pcts = sorted([base] + [p for p in (60, 100) if p > base])
+    else:
+        pcts = [int(percentage)]
 
-    def _rerun(subset):
-        model = md_divine.Divine(data=X[subset], split=split, anchors=anchors,
-                                 init_type=init_type, end="k", k=k,
-                                 refine=refine, N_atoms=N_atoms)
-        _, labs, _, _ = model.run()
-        return np.asarray(labs, dtype=int)
+    def _make(pct):
+        def _rerun(subset):
+            model = md_divine.Divine(data=X[subset], split=split,
+                                     anchors=anchors, init_type=init_type,
+                                     end="k", k=k, refine=refine,
+                                     N_atoms=N_atoms, percentage=pct)
+            _, labs, _, _ = model.run()
+            return np.asarray(labs, dtype=int)
+        return _rerun
 
-    try:
-        model = md_divine.Divine(data=X, split=split, anchors=anchors,
-                                 init_type=init_type, end="k", k=k,
-                                 refine=refine, N_atoms=N_atoms)
-        _, labels, _, _ = model.run()
-        return Solution(
-            name=f"divine/{split}/{anchors}/k{k}",
-            family=f"divine/{split}/{anchors}",
-            params={"k": k, "split": split, "anchors": anchors},
-            labels=np.asarray(labels, dtype=int),
-            n_clusters=int(len(np.unique(labels))),
-            time_s=time.time() - t0, mem_mb=_peak() - m0, native=True,
-            rerun=_rerun)
-    except Exception as exc:
-        return Solution(name=f"divine/{split}/{anchors}/k{k}",
-                        family=f"divine/{split}/{anchors}", params={"k": k},
-                        labels=np.array([], int), n_clusters=0,
-                        time_s=time.time() - t0, mem_mb=0.0, native=True,
-                        error=str(exc))
+    last_exc: Exception | None = None
+    for pct in pcts:
+        try:
+            model = md_divine.Divine(data=X, split=split, anchors=anchors,
+                                     init_type=init_type, end="k", k=k,
+                                     refine=refine, N_atoms=N_atoms,
+                                     percentage=pct)
+            _, labels, _, _ = model.run()
+            return Solution(
+                name=f"divine/{split}/{anchors}/k{k}",
+                family=f"divine/{split}/{anchors}",
+                params={"k": k, "split": split, "anchors": anchors,
+                        "percentage": pct},
+                labels=np.asarray(labels, dtype=int),
+                n_clusters=int(len(np.unique(labels))),
+                time_s=time.time() - t0, mem_mb=_peak() - m0, native=True,
+                rerun=_make(pct))
+        except Exception as exc:  # subclusters can still be undersampled
+            last_exc = exc
+            msg = str(exc)
+            if ("initiators is less than" not in msg
+                    and "Percentage is too low" not in msg):
+                break
+    return Solution(name=f"divine/{split}/{anchors}/k{k}",
+                    family=f"divine/{split}/{anchors}", params={"k": k},
+                    labels=np.array([], int), n_clusters=0,
+                    time_s=time.time() - t0, mem_mb=0.0, native=True,
+                    error=str(last_exc))
 
 
 def run_equal(X, N_atoms, threshold, seed_method="greedy",
@@ -246,9 +301,14 @@ def run_helm(X, N_atoms, k_target, initial_labels, merge_scheme="intra",
 
 
 def _initial_partition(X, k, seed=42) -> np.ndarray:
-    """Lean k-means initial partition for HELM seeding (pipeline-added)."""
+    """Lean k-means initial partition for HELM seeding (pipeline-added).
+
+    Must be able to produce MORE clusters than HELM's target K, otherwise
+    there is nothing to merge. The previous ``n // 10`` cap made HELM
+    impossible on short trajectories (e.g. 26 frames -> only 2 clusters).
+    """
     n = X.shape[0]
-    k_eff = int(min(max(2, k), max(2, n // 10)))
+    k_eff = int(min(max(2, k), max(2, n - 1)))
     km = KMeans(n_clusters=k_eff, n_init=3, random_state=seed).fit(X)
     return np.asarray(km.labels_, dtype=int)
 
@@ -522,7 +582,9 @@ def run_all(X, D, N_atoms, cfg, logger, coverage: dict | None = None
                 for k in divine_ks:
                     sol = run_divine(X, N_atoms, k, split=split,
                                      anchors=anchors, init_type=init_type,
-                                     refine=bool(cl.get("divine_refine", True)))
+                                     refine=bool(cl.get("divine_refine", True)),
+                                     percentage=int(cl.get(
+                                         "nani_percentage", 10)))
                     if sol.error:
                         logger.warning("skip %s: %s", sol.name, sol.error)
                     else:

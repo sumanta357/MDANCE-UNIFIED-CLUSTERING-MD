@@ -38,6 +38,8 @@ reporting why the winner was chosen, and exporting
 `representatives/BEST_REPRESENTATIVE_FRAME.pdb` (an **actual trajectory
 frame**, never an averaged centroid).
 
+* **Plain-language guide to the workflow and every clustering method:**
+  `docs/METHODS_EXPLAINED.md`
 * Verified MDANCE API inventory (0.4.0): `docs/verified_mdance_api.md`
 * Native MDANCE methods used: `KmeansNANI` (8 initializers), `Divine`,
   `ExtendedQuality` (eQual), `HELM`, `mdBirch` — plus `mdance.tools.bts`

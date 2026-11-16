@@ -120,6 +120,31 @@ def test_minmax_scale_directions():
     assert np.allclose(s2, 0.5)
 
 
+def test_sampling_percentage_scales_to_frame_count():
+    # 26 frames, K=6: 10% would give only 2 initiators
+    assert clustering.sampling_percentage(26, 6, 10) == 24
+    # large trajectories keep the configured percentage
+    assert clustering.sampling_percentage(500, 6, 10) == 10
+    # never exceeds 100
+    assert clustering.sampling_percentage(10, 20, 10) == 100
+
+
+def test_nani_adapts_percentage_on_small_trajectory():
+    X, _ = make_two_cluster_data(n=6, n_atoms=2, seed=3)  # 12 frames
+    sol = clustering.run_nani(X, 2, 5, "strat_all", percentage=10)
+    assert sol.error is None, sol.error
+    assert 2 <= len(np.unique(sol.labels)) <= 12
+    # 10% of 12 frames = 1 initiator -> raised to ceil(100 * 5 / 12) = 42
+    assert sol.params["percentage"] == clustering.sampling_percentage(12, 5, 10)
+    assert sol.params["percentage"] >= 42
+
+
+def test_helm_initial_partition_can_exceed_small_n():
+    X, _ = make_two_cluster_data(n=20, n_atoms=2, seed=4)
+    labels = clustering._initial_partition(X, 6, seed=0)
+    assert len(np.unique(labels)) == 6
+
+
 def test_unwrap_transform_version_fallback(monkeypatch):
     """MDAnalysis >= 2.9 removed unwrap(compound=...); fall back cleanly."""
     calls = []
