@@ -8,7 +8,7 @@ import pytest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from mdance.tools import bts  # noqa: E402  MDANCE-native
-from mdance_pipeline import clustering, features, scoring, utils  # noqa: E402
+from mdance_pipeline import clustering, features, preprocess, scoring, utils  # noqa: E402
 from mdance_pipeline.config import DEFAULT_CONFIG, deep_merge, validate_config  # noqa: E402
 from mdance_pipeline.validation import (  # noqa: E402
     ch_distance_space, cluster_medoids, db_distance_space)
@@ -118,3 +118,19 @@ def test_minmax_scale_directions():
     assert s[0] > s[1]
     s2 = utils.minmax_scale(np.array([5.0, 5.0]))
     assert np.allclose(s2, 0.5)
+
+
+def test_unwrap_transform_version_fallback(monkeypatch):
+    """MDAnalysis >= 2.9 removed unwrap(compound=...); fall back cleanly."""
+    calls = []
+
+    def fake_unwrap(ag, **kwargs):
+        if "compound" in kwargs:
+            raise TypeError("unwrap.__init__() got an unexpected keyword "
+                            "argument 'compound'")
+        calls.append(ag)
+        return "bond-based-unwrap"
+
+    monkeypatch.setattr(preprocess.transforms, "unwrap", fake_unwrap)
+    assert preprocess.unwrap_transform(object()) == "bond-based-unwrap"
+    assert len(calls) == 1

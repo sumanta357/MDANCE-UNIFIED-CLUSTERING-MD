@@ -142,6 +142,22 @@ def classify_frames(cfg: dict, u: mda.Universe) -> tuple[np.ndarray, np.ndarray]
     return np.asarray(idxs, dtype=int), np.asarray(times, dtype=float)
 
 
+def unwrap_transform(ag, logger: logging.Logger | None = None):
+    """Version-robust unwrap transformation (pipeline-added).
+
+    MDAnalysis < 2.9 accepts ``compound='fragments'``; 2.9+ removed that
+    argument and derives connectivity from the topology's bonds. Try the
+    explicit form first, then fall back to the supported signature.
+    """
+    try:
+        return transforms.unwrap(ag, compound="fragments")
+    except TypeError:
+        if logger:
+            logger.info("unwrap() does not accept compound= on this "
+                        "MDAnalysis version; using bond-based unwrap.")
+        return transforms.unwrap(ag)
+
+
 def preprocess_trajectory(cfg: dict, logger: logging.Logger) -> dict:
     """Full Phase-2 preprocessing (pipeline-added; MDAnalysis-native ops).
 
@@ -185,7 +201,7 @@ def preprocess_trajectory(cfg: dict, logger: logging.Logger) -> dict:
     if p.get("wrap_molecules", True):
         transform_list.append(transforms.wrap(u.atoms, compound=compound))
     if p.get("wrap_molecules", True) and compound == "fragments":
-        transform_list.append(transforms.unwrap(u.atoms, compound="fragments"))
+        transform_list.append(unwrap_transform(u.atoms, logger))
     if p.get("center_protein", True):
         transform_list.append(
             transforms.center_in_box(ag_center, center="geometry"))
