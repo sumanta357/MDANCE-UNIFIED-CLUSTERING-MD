@@ -28,6 +28,7 @@ class Pipeline:
         utils.ensure_dirs(self.out_dir, [
             "config", "preprocessing", "features", "clustering",
             "clustering/mdance", "clustering/gromacs",
+            "clustering/baselines",
             "clustering/optimal_clustering",
             "representatives",
             "representatives/representative_frames",
@@ -90,6 +91,15 @@ class Pipeline:
     # ---------------------------------------------------- method coverage
     def _update_gromos_coverage(self) -> None:
         sols = (self.bench_results or {}).get("solutions", []) or []
+        # Persist the actual GROMOS/Daura partitions next to the label files
+        # of the other methods (previously this folder held baselines only).
+        gdir = os.path.join(self.out_dir, "clustering", "gromos")
+        os.makedirs(gdir, exist_ok=True)
+        for sol in sols:
+            if sol.labels.size:
+                np.save(os.path.join(gdir,
+                                     f"{sol.name.replace('/', '_')}.npy"),
+                        sol.labels.astype(int))
         counts = [int(s.n_clusters) for s in sols]
         usable = [c for c in counts if c >= 2]
         if not sols:
@@ -266,11 +276,19 @@ class Pipeline:
                          "separation", "diversity", "stability_ARI",
                          "pop_max_frac", "pop_min_frac", "n_singletons",
                          "time_s", "mem_mb", "composite_score", "rank"], rows)
-        # native/added separation subdirectories (requested structure)
+        # native / benchmark / baseline separation subdirectories: only the
+        # Daura/GROMOS solutions belong in clustering/gromacs; pipeline-added
+        # baselines (Agglomerative, DBSCAN, ...) go to clustering/baselines.
         for sol in self.sols:
             if sol.labels.size == 0:
                 continue
-            sub = "mdance" if sol.native else "gromacs"
+            fam = str(sol.family).split("/")[0]
+            if sol.native:
+                sub = "mdance"
+            elif fam in ("gromos", "gromacs"):
+                sub = "gromacs"
+            else:
+                sub = "baselines"
             path = os.path.join(self.out_dir, "clustering", sub,
                                 f"{sol.name.replace('/', '_')}.npy")
             np.save(path, sol.labels.astype(int))
@@ -292,7 +310,7 @@ class Pipeline:
                 reps.write_frame_pdb(
                     self.info, idx,
                     os.path.join(reps_dir, "cluster_representatives",
-                                 f"cluster{cid:03d}_{kind}.pdb"), logger=log)
+                                 f"cluster{cid + 1:03d}_{kind}.pdb"), logger=log)
         # cluster_representatives.csv
         rows = []
         for cid in sorted(self.best_stats.keys()):
@@ -300,7 +318,7 @@ class Pipeline:
             med = self.dist["X"][st["medoid_frame"]]
             nearest = self.dist["X"][st["nearest_to_centroid"]]
             msd = float(((med - nearest) ** 2).sum() / (2.0 * N))
-            rows.append([cid, st["population"],
+            rows.append([cid + 1, st["population"],
                          st["population"] / len(self.best_labels),
                          info_idx(self.info, st["medoid_frame"], "orig"),
                          info_idx(self.info, st["medoid_frame"], "t"),
@@ -394,7 +412,10 @@ class Pipeline:
                   newline="") as fh:
             wr = csv.DictWriter(fh, fieldnames=keys, extrasaction="ignore")
             wr.writeheader()
-            wr.writerows(rows)
+            # cluster ids are 0-based internally; all user-facing files are
+            # 1-based, matching cluster_NNN_* PDB names and the banner.
+            wr.writerows([{**r, "cluster_id": r["cluster_id"] + 1}
+                          for r in rows])
 
         # candidate_frame PDBs for every candidate
         reps_dir = os.path.join(self.out_dir, "representatives")
@@ -438,7 +459,8 @@ class Pipeline:
              "analysis_frame", "original_frame", "cluster_id",
              "final_score"] +
             [f"score_{k}" for k in scoring.METRIC_KEYS],
-            [[r.get(k, "") for k in (["rank", "source_method",
+                         [[(r["cluster_id"] + 1 if k == "cluster_id" else r.get(k, ""))
+               for k in (["rank", "source_method",
                                       "source_family", "source_kind", "label",
                                       "analysis_frame", "original_frame",
                                       "cluster_id", "final_score"] +
@@ -501,7 +523,10 @@ class Pipeline:
                   f"  time            : {top['time_ps'] / 1000:.3f} ns",
                   f"  composite score : {top['final_score']:.2f} / 100",
                   "  structure       : representatives/"
-                  f"BEST_REPRESENTATIVE_FRAME_{method_reps.method_slug(top.get('source_method', ''))}.pdb",
+                  f"BEST_REPRESENTATIVE_FRAME_"
+                  f"{method_reps.method_slug(top.get('source_method', ''))}"
+                  f"_cluster{top['cluster_id'] + 1}"
+                  f"_frame{top['original_frame']}.pdb",
                   "                    (stable alias: "
                   "BEST_REPRESENTATIVE_FRAME.pdb)"]
         with open(os.path.join(reps_dir, "POSE_COMPARISON_REPORT.txt"),
@@ -677,12 +702,11 @@ class Pipeline:
                  best_row["final_score"])
 
         bench_table, bench_report = gromacs_bench.benchmark_table(
-            self.ranked[0], self.bench_results, self.sols, self.cfg)
+            self.ranked[0], self.bench_results, self.sols, self.cfg,
+            D=self.dist["D"])
         utils.write_csv(os.path.join(self.out_dir, "benchmarking",
                                      "mdance_vs_gromacs.csv"),
-                        ["method", "n_clusters", "time_s", "mem_mb",
-                         "compactness", "separation", "n_clusters_gromacs",
-                         "adj_rand_index"], bench_table)
+                        gromacs_bench.BENCH_HEADER, bench_table)
         with open(os.path.join(self.out_dir, "benchmarking",
                                "benchmarking_report.txt"), "w") as fh:
             fh.write("\n".join(bench_report))
@@ -769,7 +793,7 @@ class Pipeline:
                   f"  analysis frame  : {best_row['analysis_frame']}",
                   f"  original frame  : {best_row['original_frame']}",
                   f"  time (ns)       : {best_row['time_ps']/1000:.3f}",
-                  f"  cluster         : {best_row['cluster_id']}",
+                  f"  cluster         : {best_row['cluster_id'] + 1}",
                   f"  final score     : {best_row['final_score']}",
                   "  sensitivity     : " + json.dumps(
                       self.sens_summary.get("win_counts", {})),

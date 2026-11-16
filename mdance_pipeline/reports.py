@@ -33,7 +33,7 @@ def final_frame_report(best_row, top_rows, metric_explanations,
         f"Selected Algorithm      : {best_row.get('algorithm', '')}",
         f"Distance Metric         : {best_row.get('metric', 'MSD')}",
         f"Optimal Number of Clusters: {best_row.get('optimal_k', '')}",
-        f"Selected Cluster ID     : {best_row['cluster_id']}",
+        f"Selected Cluster ID     : {best_row['cluster_id'] + 1}",
         f"Cluster Population      : {best_row['cluster_pop_frac']*100:.2f} %",
         "",
         f"Final Composite Score   : {best_row['final_score']:.2f} / 100",
@@ -58,7 +58,7 @@ def final_frame_report(best_row, top_rows, metric_explanations,
         lines.append(
             f"#{r['rank']:<2} analysis frame {r['analysis_frame']:>6}"
             f" (original {r['original_frame']:>6})  "
-            f"cluster {r['cluster_id']:>3} (pop {r['cluster_population']:>5}"
+            f"cluster {r['cluster_id'] + 1:>3} (pop {r['cluster_population']:>5}"
             f" = {r['cluster_pop_frac']*100:5.2f}%)   score {r['final_score']:>6.2f}")
     lines += ["", "METRIC DEFINITIONS (all explicit):"]
     for name, expl in metric_explanations:

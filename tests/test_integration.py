@@ -291,6 +291,62 @@ def test_full_pipeline_end_to_end(synth_traj, tmp_path, capsys):
                                        named.group(1)))
     assert re.search(r"BEST_REPRESENTATIVE_FRAME_(NANI|DIVINE|HELM|EQUAL|MDBIRCH|AGGLOMERATIVE|DBSCAN|GROMOS)",
                      named.group(1)), named.group(1)
+    # cluster ids are 1-based everywhere user-facing
+    banner_cid = re.search(r"Selected Cluster ID\s*:\s*(\d+)", banner)
+    assert banner_cid, "banner has no Selected Cluster ID"
+    assert int(banner_cid.group(1)) >= 1
+    assert f"_cluster{banner_cid.group(1)}_frame" in named.group(1), (
+        f"banner cluster {banner_cid.group(1)} disagrees with {named.group(1)}")
+
+    # --- benchmark CSV schema and statistical comparison -----------------
+    from mdance_pipeline.gromacs_bench import BENCH_HEADER
+    bench_csv = os.path.join(str(out_dir), "benchmarking",
+                             "mdance_vs_gromacs.csv")
+    with open(bench_csv) as fh:
+        breader = csvmod.reader(fh)
+        bheader = next(breader)
+        brows = list(breader)
+    assert bheader == BENCH_HEADER, f"unexpected benchmark header: {bheader}"
+    assert brows, "benchmark CSV has no rows"
+    for row in brows:
+        assert len(row) == len(bheader), f"ragged benchmark row: {row}"
+    assert any(r[0].startswith("REFERENCE:") for r in brows)
+    bidx = {h: i for i, h in enumerate(bheader)}
+    grows = [r for r in brows if r[0].startswith("GROMACS")]
+    assert grows, "no GROMOS comparison rows"
+    for r in grows:
+        assert int(r[bidx["n_clusters_gromos"]]) >= 2
+        assert -1.0 <= float(r[bidx["adj_rand_index"]]) <= 1.0
+        assert 0.0 <= float(r[bidx["population_L1"]]) <= 1.0
+        assert 0.0 <= float(r[bidx["top5_population_divergence"]]) <= 1.0
+    with open(os.path.join(str(out_dir), "benchmarking",
+                           "benchmarking_report.txt")) as fh:
+        btxt = fh.read()
+    assert "Statistical comparison summary" in btxt
+    assert "not a significance test" in btxt
+
+    # --- GROMOS/baseline label files are stored under the right folder ---
+    gdir = os.path.join(str(out_dir), "clustering", "gromos")
+    bdir = os.path.join(str(out_dir), "clustering", "baselines")
+    gfiles = [f for f in os.listdir(gdir) if f.endswith(".npy")]
+    bfiles = [f for f in os.listdir(bdir) if f.endswith(".npy")]
+    assert any(f.startswith("gromos_") for f in gfiles), (
+        f"no GROMOS partitions in clustering/gromos: {gfiles}")
+    assert bfiles, "no baseline partitions in clustering/baselines"
+    assert not any(f.startswith(("agglom", "dbscan")) for f in gfiles), (
+        f"baseline labels leaked into clustering/gromos: {gfiles}")
+
+    # --- pose report points at a file that actually exists ---------------
+    with open(os.path.join(str(out_dir), "representatives",
+                           "POSE_COMPARISON_REPORT.txt")) as fh:
+        ptxt = fh.read()
+    pstruct = re.search(
+        r"structure\s*:\s*representatives/(BEST_REPRESENTATIVE_FRAME_\S+\.pdb)",
+        ptxt)
+    assert pstruct, "pose report does not name the winner structure"
+    assert os.path.isfile(os.path.join(str(out_dir), "representatives",
+                                       pstruct.group(1))), (
+        f"pose report points at missing file: {pstruct.group(1)}")
 
     # banner printed to stdout
     captured = capsys.readouterr().out

@@ -94,7 +94,8 @@ MDANCE_Analysis/
 ├── config/config.yaml                  # resolved configuration
 ├── preprocessing/{processed.xtc, processed.gro, preprocessing_report.txt}
 ├── features/{feature_data.npy, distance_matrix.npy}
-├── clustering/{mdance/, gromacs/, optimal_clustering/, clustering_summary.csv,
+├── clustering/{mdance/, gromacs/, baselines/, optimal_clustering/,
+│               clustering_summary.csv, method_coverage.json,
 │               k_selection/{k_selection.csv, k_selection.json,
 │                            k_selection_elbow.png}}
 ├── representatives/{global_medoid.pdb, cluster_representatives/,
@@ -145,8 +146,12 @@ requirements.txt, environment.yml, README.md
    normalization and weight renormalization for missing metrics).
 6. **Benchmark vs GROMACS** — Daura/gromos algorithm on the *identical*
    MDANCE-MSD matrix (the algorithm behind `gmx cluster -m gromos`) at several
-   cutoffs; native `gmx cluster` attempted when a `gmx` binary exists;
-   differences explicitly documented rather than claimed equivalent.
+   cutoffs; native `gmx cluster` attempted when a `gmx` binary exists (its
+   MSD cutoff is converted to an RMSD cutoff in nm); differences explicitly
+   documented rather than claimed equivalent. `benchmarking/mdance_vs_gromacs.csv`
+   reports cluster counts, runtime/memory, compactness/separation and the
+   partition-agreement statistics (ARI, population L1, top-5 population
+   divergence).
 7. **Representatives** — **per method**: every cluster of every method family
    gets a medoid PDB and a nearest-to-centroid PDB plus a `representatives.csv`
    with original frame indices and times; the best solution's cluster medoids,
