@@ -1,20 +1,21 @@
-"""Phase 6 - benchmark against GROMACS `gmx cluster` (pipeline-added module).
+"""Phase 6 - benchmark against native GROMACS `gmx cluster` (pipeline-added).
 
-Two-tier benchmark, explicitly documented (never claimed "perfectly
-equivalent"):
+Two tiers, kept explicitly separate:
 
-1. Native `gmx cluster` (only when the `gmx` binary exists AND the trajectory
-   contains exactly the atoms of the `gmx` structure file). `gmx cluster`
-   computes its own RMSD matrix over the whole system it is given; subsetting
-   atoms inside gmx (e.g. backbone-only) is not possible without regenerating
-   a subset TPR with GROMACS tools, which is out of scope of this pipeline —
-   the atomic-selection difference is then REPORTED, not hidden.
+1. Native `gmx cluster -method gromos`, executed when the `gmx` binary exists.
+   The pipeline writes a structure/trajectory/index containing EXACTLY the
+   MDANCE analysis selection, so both tiers cluster the same atoms. Native
+   per-frame membership is read from the `-clid` XVG output (and the detailed
+   `-g` log is kept). The native cutoff is converted from the MDANCE MSD units
+   of the distance matrix to the RMSD cutoff in nm that gmx expects.
 
-2. `gromos` (Daura et al. 1999) greedy clustering on the identical MDANCE
-   pairwise-MSD matrix used by every MDANCE method. This is the exact
-   algorithm behind `gmx cluster -m gromos` and gives a selection-aligned,
-   distance-aligned comparison. Multiple cutoffs are evaluated
-   (`-cutoff` equivalent).
+2. MDANCE GROMOS/Daura (greedy, Daura et al. 1999) on the identical MDANCE
+   pairwise-MSD matrix used by every MDANCE method. Multiple cutoffs are
+   evaluated, giving a distance-aligned comparison.
+
+Both tiers are compared against the same best MDANCE solution with ARI and
+population statistics. They are never merged into one number and a failed
+native run is never reported as success.
 """
 from __future__ import annotations
 
@@ -22,10 +23,12 @@ import logging
 import os
 import shutil
 import subprocess
+import time
 
 import numpy as np
 from sklearn.metrics import adjusted_rand_score
 
+from mdance_pipeline import output_layout
 from mdance_pipeline.clustering import Solution, run_gromos, upper_desc_vals
 
 
@@ -34,46 +37,161 @@ def gmx_available() -> tuple[bool, str]:
     return (path is not None, path or "")
 
 
-def run_native_gmx(xtc, gro_or_tpr, work_dir, cutoff_nm=0.10, fit_selection=None,
-                   logger=None) -> dict | None:
-    """Try the native gmx binary (experimental; documented limitations).
+def msd_to_rmsd_nm(msd: float) -> float:
+    """MDANCE MSD (Angstrom^2 / (2N)) -> RMSD cutoff in nm.
 
-    ``cutoff_nm`` is an RMSD cutoff in nm, which is what `gmx cluster`
-    expects. The pipeline's cutoffs live in MSD space, so the caller must
-    convert (RMSD = sqrt(2 * MSD) for the MDANCE pairwise MSD convention).
+    RMSD(Angstrom) = sqrt(2 * MSD); gmx expects nm.
+    """
+    return float(np.sqrt(2.0 * max(float(msd), 0.0)) / 10.0)
+
+
+def native_solution(native: dict | None) -> Solution | None:
+    """Wrap a successful native gmx result as a Solution (for representatives)."""
+    if not native or not native.get("success") or native.get("labels") is None:
+        return None
+    labels = np.asarray(native["labels"], dtype=int)
+    if labels.size == 0:
+        return None
+    return Solution(
+        name=f"gmx_native/gromos_{native.get('cutoff_nm'):.4f}nm",
+        family="gmx_native", params={"method": "gmx cluster -method gromos",
+                                     "cutoff_nm": native.get("cutoff_nm"),
+                                     "selection": native.get("selection"),
+                                     "n_atoms": native.get("n_atoms")},
+        labels=labels, n_clusters=int(native.get("n_clusters") or
+                                      len(np.unique(labels))),
+        time_s=float(native.get("time_s") or 0.0), mem_mb=0.0, native=False)
+
+
+def parse_clid_xvg(path: str, n_frames: int) -> tuple[np.ndarray, int]:
+    """Parse `gmx cluster -clid` into dense 0-based labels.
+
+    The XVG holds one row per frame: time and cluster number. Cluster numbers
+    are normalized to 0..k-1; the assignment (and therefore ARI) is unchanged.
+    """
+    ids: list[int] = []
+    with open(path, errors="replace") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line or line[0] in "#@":
+                continue
+            parts = line.split()
+            if len(parts) < 2:
+                continue
+            try:
+                ids.append(int(round(float(parts[1]))))
+            except ValueError:
+                continue
+    if len(ids) != int(n_frames):
+        raise ValueError(
+            f"gmx -clid produced {len(ids)} assignments for {n_frames} frames")
+    raw = np.asarray(ids, dtype=int)
+    _, labels = np.unique(raw, return_inverse=True)
+    return labels.astype(int), int(len(np.unique(labels)))
+
+
+def _write_native_inputs(pre_info: dict, work_dir: str, logger=None) -> dict:
+    """Write structure/trajectory/index for the exact MDANCE atom selection."""
+    import MDAnalysis as mda
+
+    native_dir = os.path.join(work_dir, "native_selection")
+    os.makedirs(native_dir, exist_ok=True)
+    u = pre_info["universe"]
+    selection = pre_info["selection"]
+    ag = u.select_atoms(selection)
+    if ag.n_atoms == 0:
+        raise ValueError(f"native gmx selection '{selection}' matched 0 atoms")
+    gro = os.path.join(native_dir, "selection.gro")
+    xtc = os.path.join(native_dir, "selection.xtc")
+    ndx = os.path.join(native_dir, "selection.ndx")
+    ag.write(gro)
+    with mda.Writer(xtc, n_atoms=ag.n_atoms, multiframe=True) as writer:
+        for _ in u.trajectory:
+            writer.write(ag)
+    with open(ndx, "w") as fh:
+        fh.write("[ MDANCE_SELECTION ]\n")
+        for start in range(0, ag.n_atoms, 15):
+            fh.write(" ".join(str(i) for i in
+                              range(start + 1, min(start + 15, ag.n_atoms) + 1)))
+            fh.write("\n")
+    if logger:
+        logger.info("Native gmx inputs: %d atoms from selection '%s' -> %s",
+                    ag.n_atoms, selection, native_dir)
+    return {"gro": gro, "xtc": xtc, "ndx": ndx,
+            "n_atoms": int(ag.n_atoms), "selection": selection}
+
+
+def run_native_gmx(pre_info: dict, work_dir: str, cutoff_nm: float = 0.10,
+                   logger=None) -> dict | None:
+    """Run native `gmx cluster` on the MDANCE selection and parse membership.
+
+    ``cutoff_nm`` is an RMSD cutoff in nm (gmx convention), converted by the
+    caller from the MDANCE MSD matrix. The run uses the already aligned,
+    PBC-corrected trajectory and ``-nofit`` so the RMSD definition matches the
+    pre-aligned coordinates used by MDANCE as closely as GROMACS allows.
     """
     ok, gmx_bin = gmx_available()
     if not ok:
         return None
-    os.makedirs(work_dir, exist_ok=True)
-    sel = fit_selection or "Backbone"
-    out_stub = os.path.join(work_dir, "gmx_cluster")
-    cmd = [gmx_bin, "cluster", "-s", gro_or_tpr, "-f", xtc,
-           "-method", "gromos", "-cutoff", f"{cutoff_nm:.5f}",
-           "-cl", out_stub + "_clusters.xtc", "-g", out_stub + ".log",
-           "-av", out_stub + "_rep.xtc", "-o", out_stub + ".xpm",
-           "-sz", out_stub + "_sz.xvg", "-hist", out_stub + "_hist.xvg",
-           "-rms", out_stub + "_rmsd.xvg", "-dist", out_stub + "_rmsd-dist.xvg"]
+    t0 = time.time()
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=3600,
-                              input=f"{sel}\n", errors="replace")
+        inputs = _write_native_inputs(pre_info, work_dir, logger)
     except Exception as exc:
         if logger:
-            logger.warning("native gmx cluster failed: %s", exc)
+            logger.warning("could not prepare native gmx inputs: %s", exc)
+        return {"returncode": None, "success": False, "cmd": "",
+                "cutoff_nm": float(cutoff_nm), "error": str(exc),
+                "labels": None, "n_clusters": 0}
+
+    out_stub = os.path.join(work_dir, "gmx_cluster")
+    clid = out_stub + "_clid.xvg"
+    log_path = out_stub + ".log"
+    cmd = [gmx_bin, "cluster", "-s", inputs["gro"], "-f", inputs["xtc"],
+           "-n", inputs["ndx"], "-method", "gromos",
+           "-cutoff", f"{cutoff_nm:.6f}", "-nofit",
+           "-clid", clid, "-g", log_path, "-o", out_stub + ".xpm",
+           "-sz", out_stub + "_sz.xvg", "-dist", out_stub + "_dist.xvg"]
+    env = dict(os.environ)
+    env.setdefault("GMX_MAXBACKUP", "-1")
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True,
+                              timeout=3600, input="MDANCE_SELECTION\n",
+                              errors="replace", env=env)
+    except Exception as exc:
+        if logger:
+            logger.warning("native gmx cluster failed to start: %s", exc)
         return {"returncode": None, "success": False, "cmd": " ".join(cmd),
                 "cutoff_nm": float(cutoff_nm), "error": str(exc),
+                "labels": None, "n_clusters": 0,
                 "stdout_tail": "", "stderr_tail": ""}
-    # gmx cluster writes cluster membership to <stub>_clusters.xtc; native
-    # membership parsing is nontrivial, so only the run outcome is reported.
-    log_path = out_stub + ".log"
+
     success = proc.returncode == 0 and os.path.isfile(log_path)
+    labels = None
+    n_clusters = 0
+    error = None
+    if success:
+        try:
+            labels, n_clusters = parse_clid_xvg(clid, len(pre_info["frame_indices"]))
+        except Exception as exc:
+            success = False
+            error = f"membership parse failed: {exc}"
+    else:
+        error = f"gmx cluster returned {proc.returncode}"
     if not success and logger:
-        logger.warning("native gmx cluster returned %s (see %s)",
-                       proc.returncode, log_path)
-    return {"returncode": proc.returncode, "success": success,
+        logger.warning("native gmx cluster failed: %s (see %s)", error, log_path)
+    elif logger:
+        logger.info("Native gmx cluster: %d clusters (cutoff %.6f nm, %d atoms)",
+                    n_clusters, cutoff_nm, inputs["n_atoms"])
+    return {"returncode": proc.returncode, "success": bool(success),
             "cmd": " ".join(cmd), "cutoff_nm": float(cutoff_nm),
-            "stdout_tail": (proc.stdout or "")[-2000:],
-            "stderr_tail": (proc.stderr or "")[-2000:]}
+            "time_s": time.time() - t0,
+            "labels": labels, "n_clusters": int(n_clusters),
+            "error": error, "selection": inputs["selection"],
+            "n_atoms": inputs["n_atoms"],
+            "structure": inputs["gro"], "trajectory": inputs["xtc"],
+            "clid": clid, "log": log_path,
+            "stdout_tail": (proc.stdout or "")[-4000:],
+            "stderr_tail": (proc.stderr or "")[-4000:]}
 
 
 def compare_partitions(mdance_labels: np.ndarray, gromos_labels: np.ndarray) -> dict:
@@ -117,7 +235,9 @@ def benchmark(sols: list[Solution], D, X, cfg, logger, pre_info,
     if not bench.get("enabled", True):
         logger.info("GROMACS benchmark disabled by config.")
         return {}
-    os.makedirs(os.path.join(out_dir, "benchmarking"), exist_ok=True)
+    work_dir = os.path.join(out_dir, output_layout.INTERMEDIATE_DIR,
+                            "gromacs_benchmark")
+    os.makedirs(work_dir, exist_ok=True)
     bench_sols: list[Solution] = []
     cutoffs = [float(np.quantile(upper_desc_vals(D), q))
                for q in bench.get("gromos_cutoff_quantiles", [.05, .1, .2, .35, .5, .7])]
@@ -129,16 +249,17 @@ def benchmark(sols: list[Solution], D, X, cfg, logger, pre_info,
     if bench.get("native_gmx", "auto") in (True, "auto"):
         ok, _ = gmx_available()
         if ok:
-            logger.info("gmx binary found - attempting native gmx cluster "
-                        "(selection limited to the supplied structure; "
-                        "documented difference from atlas MDANCE selection).")
-            native = run_native_gmx(
-                pre_info["paths"]["processed_xtc"], pre_info["paths"]["processed_gro"],
-                os.path.join(out_dir, "benchmarking"),
-                # MSD -> RMSD (nm): D = sum(d^2)/(2N), so RMSD = sqrt(2*D)
-                cutoff_nm=float(np.sqrt(2.0 * cutoffs[1])),
-                fit_selection=bench.get("native_gmx_fitting_selection", "Backbone"),
-                logger=logger)
+            q = float(bench.get("native_gmx_cutoff_quantile", 0.10))
+            cutoff_msd = float(np.quantile(upper_desc_vals(D), q))
+            cutoff_nm = bench.get("native_gmx_cutoff_nm")
+            if cutoff_nm is None:
+                cutoff_nm = msd_to_rmsd_nm(cutoff_msd)
+            logger.info("gmx binary found - running native gmx cluster on "
+                        "the MDANCE selection (%s), cutoff %.6f nm "
+                        "(quantile %.2f).", pre_info["selection"],
+                        cutoff_nm, q)
+            native = run_native_gmx(pre_info, work_dir,
+                                    cutoff_nm=float(cutoff_nm), logger=logger)
         else:
             logger.info("gmx binary not found - benchmark uses the faithful "
                         "Python Daura/gromos implementation on the identical "
@@ -176,7 +297,7 @@ def _partition_shape(labels, D):
 
 def benchmark_table(best_metrics, bench_results, sols, cfg,
                     D=None) -> tuple[list, list]:
-    """Rows for mdance_vs_gromacs.csv + lines for benchmarking_report.txt.
+    """Rows for GROMACS_COMPARISON.csv + benchmarking_report.txt lines.
 
     Every row has exactly ``len(BENCH_HEADER)`` values, so the CSV columns
     and their values can never drift apart.
@@ -247,17 +368,51 @@ def benchmark_table(best_metrics, bench_results, sols, cfg,
                 f"population L1 {cmpo['population_L1']:.3f}, "
                 f"top5-population divergence "
                 f"{cmpo['top5_pop_divergence']:.3f}")
+    native_ari = None
     if native:
-        rows.append(["native gmx cluster", None, None, None, None, None,
-                     None, None, None, None, None])
-        report.append("")
-        report.append("Native gmx cluster was attempted with cutoff "
-                      f"{native.get('cutoff_nm')} nm RMSD; return code "
-                      f"{native.get('returncode')} "
-                      f"({'success' if native_ok else 'FAILED'}; "
-                      "see benchmarking/gmx_cluster*.log).")
-        report.append("Native membership parsing is not claimed equivalent;")
-        report.append("the quantitative comparison is the gromos-on-MSD tier.")
+        native_labels = native.get("labels")
+        if native_ok and native_labels is not None and best is not None:
+            ref = next((s for s in sols if s.name == best.name), None)
+            cmpo = (compare_partitions(ref.labels, native_labels)
+                    if ref is not None else {})
+            compact, sep = _partition_shape(native_labels, D)
+            native_ari = cmpo.get("adj_rand_index")
+            rows.append([f"native_gmx:gromos:{native.get('cutoff_nm'):.4f}nm",
+                         int(native.get("n_clusters") or 0),
+                         native.get("time_s"), 0.0, compact, sep,
+                         cmpo.get("n_clusters_reference"),
+                         cmpo.get("n_clusters_gromos"),
+                         cmpo.get("population_L1"),
+                         cmpo.get("top5_pop_divergence"), native_ari])
+            report.append("")
+            report.append("Native gmx cluster SUCCEEDED: cutoff "
+                          f"{native.get('cutoff_nm'):.6f} nm RMSD, "
+                          f"{native.get('n_clusters')} clusters on the "
+                          f"MDANCE selection ({native.get('selection')}, "
+                          f"{native.get('n_atoms')} atoms).")
+            if cmpo:
+                report.append(
+                    f"  vs reference: ARI {native_ari}, population L1 "
+                    f"{cmpo['population_L1']:.3f}, top5-population "
+                    f"divergence {cmpo['top5_pop_divergence']:.3f}")
+            report.append("  Membership comes from gmx -clid and is compared "
+                          "on the same frames as MDANCE.")
+            report.append("  Native gmx uses its own RMSD/fitting definition;"
+                          " the separate gromos-on-MSD rows above remain "
+                          "the distance-aligned tier.")
+        else:
+            rows.append(["native gmx cluster", None, None, None, None, None,
+                         None, None, None, None, None])
+            report.append("")
+            report.append("Native gmx cluster was attempted with cutoff "
+                          f"{native.get('cutoff_nm')} nm RMSD; return code "
+                          f"{native.get('returncode')} "
+                          f"({'success' if native_ok else 'FAILED'}; "
+                          f"{native.get('error') or ''}).")
+            report.append("A failed native run is NOT counted as a successful "
+                          "benchmark; see "
+                          "04_ADVANCED_ANALYSIS/INTERMEDIATE_RESULTS/"
+                          "gromacs_benchmark/gmx_cluster*.log.")
     if aris:
         best_i = int(np.argmax(aris))
         bench_sols = bench_results.get("solutions", [])
@@ -275,6 +430,11 @@ def benchmark_table(best_metrics, bench_results, sols, cfg,
         report.append("  compares cluster-size profiles. Both are descriptive "
                       "agreement")
         report.append("  statistics, not a significance test.")
+    if native_ari is not None:
+        report.append("")
+        report.append("Native gmx agreement with the reference MDANCE "
+                      f"partition: ARI {native_ari:.4f} (one cutoff; "
+                      "descriptive).")
     report.append("")
     report.append("Runtime/memory comparison summary is included per row above;")
     report.append("the native gmx binary tier is qualitative-only.")

@@ -109,17 +109,17 @@ def write_frame_pdb(info, frame_idx: int, out_path: str, logger=None) -> None:
 
 def write_representatives(best_stats: dict, best_labels, info, out_dir,
                           logger) -> str:
-    """Export representatives/global_medoid.pdb, cluster reps, candidates."""
-    reps_dir = os.path.join(out_dir, "representatives")
-    os.makedirs(os.path.join(reps_dir, "cluster_representatives"), exist_ok=True)
-    os.makedirs(os.path.join(reps_dir, "candidate_frames"), exist_ok=True)
+    """Legacy helper: export global/cluster medoids under advanced analysis."""
+    from mdance_pipeline import output_layout
+    reps_dir = os.path.join(out_dir, output_layout.MEDOID_DIR)
+    os.makedirs(reps_dir, exist_ok=True)
 
     gm = global_medoid_index(info["X"], info["n_atoms_selected"])
     write_frame_pdb(info, gm, os.path.join(reps_dir, "global_medoid.pdb"), logger)
     for cid, st in best_stats.items():
         for kind, idx in (("medoid", st["medoid_frame"]),
                           ("nearest_to_centroid", st["nearest_to_centroid"])):
-            path = os.path.join(reps_dir, "cluster_representatives",
-                                f"cluster{cid:03d}_{kind}.pdb")
+            path = os.path.join(reps_dir,
+                                f"cluster{cid + 1:03d}_{kind}.pdb")
             write_frame_pdb(info, idx, path, logger)
     return reps_dir

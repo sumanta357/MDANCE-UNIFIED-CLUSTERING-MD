@@ -13,30 +13,33 @@ used by **NANI, DIVINE, HELM and Agglomerative** (one shared K by default;
 `k_selection.per_method: true` gives each of them its own scan and K). eQual,
 mdBIRCH, DBSCAN and GROMOS/Daura keep their native threshold/density
 behaviour and are never forced onto that K. Results:
-`clustering/k_selection/`.
-* **Representative frames for every method** — each method's clusters are
-exported (medoid + nearest-to-centroid, actual trajectory frames with original
-frame index and simulation time) under
-`representatives/representative_frames/<METHOD>/`.
-* **Explicit method coverage** — `reports/METHOD_COVERAGE.txt` +
-`clustering/method_coverage.json` list, for every method, whether it produced
-usable partitions and why not when it did not (disabled, too many frames,
-threshold sweep gave <2 clusters, failed runs). Threshold sweeps (eQual,
+`03_PLOTS/K_SELECTION.png` (details in
+`04_ADVANCED_ANALYSIS/INTERMEDIATE_RESULTS/k_selection/`).
+* **One best representative pose per method** — each successful method's
+best-scoring representative (actual trajectory frame, original frame index
+and simulation time) is written to
+`02_METHOD_COMPARISON/METHOD_REPRESENTATIVES/<METHOD>.pdb`, with one row per
+method in `POSE_RANKING.csv`.
+* **Explicit method coverage** — `METHOD_COVERAGE.txt` +
+`method_coverage.json` under `04_ADVANCED_ANALYSIS/INTERMEDIATE_RESULTS/`
+list, for every method, whether it produced usable partitions and why not when
+it did not (disabled, too many frames, threshold sweep gave <2 clusters,
+failed runs). Threshold sweeps (eQual,
 mdBIRCH, DBSCAN) also test thresholds at the nearest-neighbour distance scale,
 so they no longer collapse to one cluster / all-noise, and the HELM frame cap
 is 20 000 (configurable).
 * **Cross-method pose comparison** — all those poses compete in one ranked
-table (`representatives/pose_comparison.csv`), each scored inside its own
-method's partition, so `BEST_REPRESENTATIVE_FRAME.pdb` can come from **any**
-method. `reports/METHOD_AND_POSE_SUMMARY.txt` reports both the best method by
-cluster validation and the best pose, and whether they agree. See
+table, each scored inside its own method's partition, so
+`01_FINAL_RESULTS/BEST_POSE.pdb` can come from **any** method.
+`METHOD_AND_POSE_SUMMARY.txt` reports both the best method by cluster
+validation and the best pose, and whether they agree. See
 `docs/automatic_k_and_representatives.md`.
 
 The scientific goal is *the final frame*, not the clustering: the pipeline
 ends by scoring every candidate representative frame (0–100), ranking them,
 reporting why the winner was chosen, and exporting
-`representatives/BEST_REPRESENTATIVE_FRAME.pdb` (an **actual trajectory
-frame**, never an averaged centroid).
+`01_FINAL_RESULTS/BEST_POSE.pdb` (an **actual trajectory frame**, never an
+averaged centroid).
 
 * **Plain-language guide to the workflow and every clustering method:**
   `docs/METHODS_EXPLAINED.md`
@@ -74,6 +77,11 @@ python run_mdance.py \
     --benchmark-gromacs --select-best-frame
 ```
 
+Add `--full-output` to also export every scored candidate frame and every
+per-cluster medoid/centroid PDB under `04_ADVANCED_ANALYSIS/`. The default run
+writes only the final results, one pose per successful method and the four
+primary plots.
+
 Or with a YAML configuration:
 
 ```bash
@@ -93,33 +101,40 @@ in the reports).
 
 ```
 MDANCE_Analysis/
-├── config/config.yaml                  # resolved configuration
-├── preprocessing/{processed.xtc, processed.gro, preprocessing_report.txt}
-├── features/{feature_data.npy, distance_matrix.npy}
-├── clustering/{mdance/, gromacs/, baselines/, optimal_clustering/,
-│               clustering_summary.csv, method_coverage.json,
-│               k_selection/{k_selection.csv, k_selection.json,
-│                            k_selection_elbow.png}}
-├── representatives/{global_medoid.pdb, cluster_representatives/,
-│                    candidate_frames/, BEST_REPRESENTATIVE_FRAME.pdb,
-│                    candidate_frame_scores.csv, cluster_representatives.csv,
-│                    representative_frames/<NANI|DIVINE|HELM|Agglomerative|
-│                        eQual|mdBIRCH|DBSCAN|GROMOS>/ (cluster_NNN_medoid.pdb,
-│                        cluster_NNN_centroid.pdb, representatives.csv),
-│                    method_recommendation.txt, RECOMMENDED_METHOD_FRAME.pdb,
-│                    method_representatives.json,
-│                    pose_comparison.csv, POSE_COMPARISON_REPORT.txt,
-│                    BEST_REPRESENTATIVE_FRAME_<METHOD>_cluster<N>_frame<orig>.pdb,
-│                    RECOMMENDED_METHOD_FRAME_<METHOD>_<params>_cluster<N>_frame<orig>.pdb}
-├── benchmarking/{mdance_vs_gromacs.csv, benchmarking_report.txt}
-├── scoring/{scoring_metrics.csv, scoring_weights.yaml, sensitivity_analysis.csv}
-├── plots/  *.png
-├── reports/{complete_analysis_report.txt, clustering_summary.{csv,json},
-│            FINAL_FRAME_SELECTION_REPORT.txt,
-│            METHOD_AND_POSE_SUMMARY.txt, METHOD_COVERAGE.txt}
-├── logs/analysis.log
-requirements.txt, environment.yml, README.md
+├── README.txt                     # where to look first
+├── 01_FINAL_RESULTS/
+│   ├── BEST_POSE.pdb              # highest-scoring representative (use this)
+│   ├── BEST_METHOD.pdb            # recommended-method representative
+│   ├── FINAL_SUMMARY.csv          # key numbers on one screen
+│   └── FINAL_REPORT.txt           # plain-language report
+├── 02_METHOD_COMPARISON/
+│   ├── METHOD_RANKING.csv         # one row per method, incl. FAILED/SKIPPED
+│   ├── POSE_RANKING.csv           # best pose per successful method
+│   ├── CLUSTER_POPULATION.csv
+│   ├── GROMACS_COMPARISON.csv
+│   └── METHOD_REPRESENTATIVES/<METHOD>.pdb
+├── 03_PLOTS/
+│   ├── K_SELECTION.png
+│   ├── CLUSTER_COMPARISON.png
+│   ├── POSE_RANKING.png
+│   └── GROMACS_COMPARISON.png
+├── 04_ADVANCED_ANALYSIS/
+│   ├── CANDIDATE_FRAMES/          # every candidate (--full-output)
+│   ├── CLUSTER_MEDOIDS/           # per-cluster medoids (--full-output)
+│   ├── SENSITIVITY_ANALYSIS/
+│   ├── DIAGNOSTIC_PLOTS/
+│   └── INTERMEDIATE_RESULTS/      # K scan, labels, raw metrics, details
+├── 05_PREPROCESSING/
+│   ├── PROCESSED_TRAJECTORY/{processed.xtc, processed_pbc.xtc}
+│   ├── REFERENCE_STRUCTURE/reference.gro
+│   └── preprocessing_report.txt
+└── logs/analysis.log
 ```
+
+By default only final results, one pose per successful method and the four
+primary plots are exported. Add `--full-output` to also write every scored
+candidate frame and per-cluster medoid/centroid PDB under
+`04_ADVANCED_ANALYSIS/`. Diagnostics are moved there rather than deleted.
 
 ## What the pipeline does (phases)
 
@@ -148,16 +163,22 @@ requirements.txt, environment.yml, README.md
    normalization and weight renormalization for missing metrics).
 6. **Benchmark vs GROMACS** — Daura/gromos algorithm on the *identical*
    MDANCE-MSD matrix (the algorithm behind `gmx cluster -m gromos`) at several
-   cutoffs; native `gmx cluster` attempted when a `gmx` binary exists (its
-   MSD cutoff is converted to an RMSD cutoff in nm); differences explicitly
-   documented rather than claimed equivalent. `benchmarking/mdance_vs_gromacs.csv`
-   reports cluster counts, runtime/memory, compactness/separation and the
-   partition-agreement statistics (ARI, population L1, top-5 population
-   divergence).
-7. **Representatives** — **per method**: every cluster of every method family
-   gets a medoid PDB and a nearest-to-centroid PDB plus a `representatives.csv`
-   with original frame indices and times; the best solution's cluster medoids,
-   nearest-to-centroids and the global medoid are also written at the top level.
+   cutoffs; native `gmx cluster -method gromos` runs automatically when the
+   `gmx` binary exists. Native input files contain exactly the MDANCE atom
+   selection, the MSD cutoff is converted to an RMSD cutoff in nm, and native
+   per-frame membership is parsed from `-clid` for a real quantitative
+   comparison. `02_METHOD_COMPARISON/GROMACS_COMPARISON.csv` reports cluster
+   counts, runtime/memory, compactness/separation and partition-agreement
+   statistics (ARI, population L1, top-5 population divergence) for native
+   GROMACS and the MDANCE GROMOS tier separately. Native success/failure is
+   reported explicitly; a failed run is never treated as a successful
+   benchmark.
+7. **Representatives** — **per method**: the best representative pose of every
+   successful method is scored and exported as
+   `02_METHOD_COMPARISON/METHOD_REPRESENTATIVES/<METHOD>.pdb` with original
+   frame index and time in `POSE_RANKING.csv`; the recommended-method pose is
+   `01_FINAL_RESULTS/BEST_METHOD.pdb`. Per-cluster medoid/centroid PDBs are
+   opt-in under `04_ADVANCED_ANALYSIS/CLUSTER_MEDOIDS/` (`--full-output`).
    Centroids are never exported (not physical frames). The recommended method
    and its representative frame are reported separately from the composite
    frame score.
@@ -165,20 +186,19 @@ requirements.txt, environment.yml, README.md
    method (plus the nearest-to-centroid frame when different) is scored 0–100
    from six min-max-normalized metric groups with YAML-configurable weights,
    each pose evaluated inside its own method's partition; ligand metrics are
-   optional (weights renormalize). The winner can come from any method, and
-   `reports/METHOD_AND_POSE_SUMMARY.txt` states the best method and the best
-   pose separately. Winner files are method-named, e.g.
-   `BEST_REPRESENTATIVE_FRAME_NANI_comp_sim_k3_cluster2_frame13.pdb`
-   (`BEST_REPRESENTATIVE_FRAME.pdb` remains as a stable alias), and the
-   recommended-method frame is
-   `RECOMMENDED_METHOD_FRAME_<METHOD>_<params>_cluster<N>_frame<orig>.pdb`.
+   optional (weights renormalize). The winner can come from any method and is
+   exported as `01_FINAL_RESULTS/BEST_POSE.pdb`; the best pose per method is
+   `02_METHOD_COMPARISON/POSE_RANKING.csv` + `METHOD_REPRESENTATIVES/`. Detail
+   is retained in `04_ADVANCED_ANALYSIS/INTERMEDIATE_RESULTS/`.
 9. **Sensitivity** — Dirichlet weight perturbations; winner frequency; most
    robust frame reported.
 10. **Visualization** — population, silhouette, RMSD, distance heatmap, PCA,
     method comparison, candidate ranking, sensitivity (+optional t-SNE; PCA /
     t-SNE are labeled visualization-only, clustering uses MSD space).
-11. **Reports** — the exact FINAL-BEST-REPRESENTATIVE-FRAME banner, plus
-    complete/benchmarking/preprocessing reports, CSV/JSON summaries, logs.
+11. **Reports** — `01_FINAL_RESULTS/FINAL_REPORT.txt` (plain language) and
+    `FINAL_SUMMARY.csv`, plus the detailed banner and CSV/JSON diagnostics in
+    `04_ADVANCED_ANALYSIS/INTERMEDIATE_RESULTS/`, logs and preprocessing
+    reports.
 
 ## Tests
 

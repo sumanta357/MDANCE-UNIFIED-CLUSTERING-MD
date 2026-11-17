@@ -13,6 +13,8 @@ import numpy as np
 
 from mdance.tools import bts  # MDANCE-native toolkit
 
+from mdance_pipeline import output_layout
+
 
 def msd_pairwise_chunked(X: np.ndarray, N_atoms: int, chunk_size: int = 512,
                          dtype=np.float32) -> np.ndarray:
@@ -128,8 +130,8 @@ def comp_centrality(X: np.ndarray, N_atoms: int) -> np.ndarray:
 
 
 def save_features(X: np.ndarray, D: np.ndarray | None, out_dir: str) -> None:
-    """Write feature_data.npy / distance_matrix.npy as required Phase 11."""
-    f_dir = os.path.join(out_dir, "features")
+    """Write the feature matrix and distance matrix under advanced analysis."""
+    f_dir = os.path.join(out_dir, output_layout.INTERMEDIATE_DIR, "features")
     os.makedirs(f_dir, exist_ok=True)
     np.save(os.path.join(f_dir, "feature_data.npy"), X)
     if D is not None:

@@ -15,6 +15,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "dpi": 150,
         "plots_enabled": True,
         "log_level": "INFO",
+        "full_output": False,      # also export every candidate/cluster PDB
     },
     "preprocess": {
         "tpr": None,             # optional
@@ -79,7 +80,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "enabled": True,
         "gromos_cutoff_quantiles": [0.05, 0.10, 0.20, 0.35, 0.50, 0.70],
         "native_gmx": "auto",        # 'auto' | True | False
-        "native_gmx_fitting_selection": "Backbone",
+        # Native gmx cutoff is taken from this quantile of the MDANCE MSD
+        # distribution (converted RMSD nm), unless native_gmx_cutoff_nm is set.
+        "native_gmx_cutoff_quantile": 0.10,
+        "native_gmx_cutoff_nm": None,
     },
     "validation": {
         "weights": {
@@ -161,6 +165,8 @@ def apply_cli_overrides(cfg: dict, args) -> dict:
             p[key] = val
     if args.output:
         cfg["system"]["output_dir"] = args.output
+    if getattr(args, "full_output", None) is not None:
+        cfg["system"]["full_output"] = bool(args.full_output)
     benchmark = dict(cfg["benchmark"])
     if args.benchmark_gromacs is not None:
         benchmark["enabled"] = bool(args.benchmark_gromacs)

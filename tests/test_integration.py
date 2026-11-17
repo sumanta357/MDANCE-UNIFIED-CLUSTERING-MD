@@ -137,39 +137,50 @@ def test_full_pipeline_end_to_end(synth_traj, tmp_path, capsys):
     assert result["final"] is not None
 
     required = [
-        "config/config.yaml",
-        "preprocessing/processed.xtc",
-        "preprocessing/processed.gro",
-        "preprocessing/preprocessing_report.txt",
-        "features/feature_data.npy",
-        "features/distance_matrix.npy",
-        "clustering/optimal_clustering/labels.npy",
-        "clustering/optimal_clustering/model_card.txt",
-        "clustering/k_selection/k_selection.csv",
-        "clustering/k_selection/k_selection.json",
-        "clustering/k_selection/k_selection_elbow.png",
-        "representatives/global_medoid.pdb",
-        "representatives/method_recommendation.txt",
-        "representatives/method_representatives.json",
-        "representatives/RECOMMENDED_METHOD_FRAME.pdb",
-        "representatives/BEST_REPRESENTATIVE_FRAME.pdb",
-        "representatives/candidate_frame_scores.csv",
-        "representatives/cluster_representatives.csv",
-        "benchmarking/mdance_vs_gromacs.csv",
-        "benchmarking/benchmarking_report.txt",
-        "scoring/scoring_metrics.csv",
-        "scoring/scoring_weights.yaml",
-        "scoring/sensitivity_analysis.csv",
-        "plots/cluster_population.png",
-        "plots/silhouette_analysis.png",
-        "plots/rmsd_heatmap.png",
-        "plots/pca_clustering.png",
-        "plots/clustering_comparison.png",
-        "plots/representative_ranking.png",
-        "reports/complete_analysis_report.txt",
-        "reports/clustering_summary.csv",
-        "reports/clustering_summary.json",
-        "reports/FINAL_FRAME_SELECTION_REPORT.txt",
+        "README.txt",
+        "01_FINAL_RESULTS/BEST_POSE.pdb",
+        "01_FINAL_RESULTS/BEST_METHOD.pdb",
+        "01_FINAL_RESULTS/FINAL_SUMMARY.csv",
+        "01_FINAL_RESULTS/FINAL_REPORT.txt",
+        "02_METHOD_COMPARISON/METHOD_RANKING.csv",
+        "02_METHOD_COMPARISON/POSE_RANKING.csv",
+        "02_METHOD_COMPARISON/CLUSTER_POPULATION.csv",
+        "02_METHOD_COMPARISON/GROMACS_COMPARISON.csv",
+        "03_PLOTS/K_SELECTION.png",
+        "03_PLOTS/CLUSTER_COMPARISON.png",
+        "03_PLOTS/POSE_RANKING.png",
+        "03_PLOTS/GROMACS_COMPARISON.png",
+        "04_ADVANCED_ANALYSIS/SENSITIVITY_ANALYSIS/sensitivity_analysis.csv",
+        "04_ADVANCED_ANALYSIS/SENSITIVITY_ANALYSIS/scoring_sensitivity.png",
+        "04_ADVANCED_ANALYSIS/DIAGNOSTIC_PLOTS/cluster_population.png",
+        "04_ADVANCED_ANALYSIS/DIAGNOSTIC_PLOTS/silhouette_analysis.png",
+        "04_ADVANCED_ANALYSIS/DIAGNOSTIC_PLOTS/rmsd_heatmap.png",
+        "04_ADVANCED_ANALYSIS/DIAGNOSTIC_PLOTS/pca_clustering.png",
+        "04_ADVANCED_ANALYSIS/INTERMEDIATE_RESULTS/config.yaml",
+        "04_ADVANCED_ANALYSIS/INTERMEDIATE_RESULTS/features/feature_data.npy",
+        "04_ADVANCED_ANALYSIS/INTERMEDIATE_RESULTS/features/distance_matrix.npy",
+        "04_ADVANCED_ANALYSIS/INTERMEDIATE_RESULTS/clustering/optimal_clustering/labels.npy",
+        "04_ADVANCED_ANALYSIS/INTERMEDIATE_RESULTS/clustering/optimal_clustering/model_card.txt",
+        "04_ADVANCED_ANALYSIS/INTERMEDIATE_RESULTS/k_selection/k_selection.csv",
+        "04_ADVANCED_ANALYSIS/INTERMEDIATE_RESULTS/k_selection/k_selection.json",
+        "04_ADVANCED_ANALYSIS/INTERMEDIATE_RESULTS/k_selection/k_selection_elbow.png",
+        "04_ADVANCED_ANALYSIS/INTERMEDIATE_RESULTS/method_coverage.json",
+        "04_ADVANCED_ANALYSIS/INTERMEDIATE_RESULTS/METHOD_COVERAGE.txt",
+        "04_ADVANCED_ANALYSIS/INTERMEDIATE_RESULTS/method_recommendation.txt",
+        "04_ADVANCED_ANALYSIS/INTERMEDIATE_RESULTS/method_representatives.json",
+        "04_ADVANCED_ANALYSIS/INTERMEDIATE_RESULTS/candidate_frame_scores.csv",
+        "04_ADVANCED_ANALYSIS/INTERMEDIATE_RESULTS/pose_candidates_all.csv",
+        "04_ADVANCED_ANALYSIS/INTERMEDIATE_RESULTS/solution_metrics.csv",
+        "04_ADVANCED_ANALYSIS/INTERMEDIATE_RESULTS/solution_summary.csv",
+        "04_ADVANCED_ANALYSIS/INTERMEDIATE_RESULTS/solution_summary.json",
+        "04_ADVANCED_ANALYSIS/INTERMEDIATE_RESULTS/benchmarking_report.txt",
+        "04_ADVANCED_ANALYSIS/INTERMEDIATE_RESULTS/scoring_metrics.csv",
+        "04_ADVANCED_ANALYSIS/INTERMEDIATE_RESULTS/scoring_weights.yaml",
+        "04_ADVANCED_ANALYSIS/INTERMEDIATE_RESULTS/complete_analysis_report.txt",
+        "04_ADVANCED_ANALYSIS/INTERMEDIATE_RESULTS/FINAL_FRAME_SELECTION_REPORT.txt",
+        "05_PREPROCESSING/PROCESSED_TRAJECTORY/processed.xtc",
+        "05_PREPROCESSING/REFERENCE_STRUCTURE/reference.gro",
+        "05_PREPROCESSING/preprocessing_report.txt",
         "logs/analysis.log",
     ]
     for rel in required:
@@ -180,7 +191,8 @@ def test_full_pipeline_end_to_end(synth_traj, tmp_path, capsys):
 
     # --- automatic K selection ------------------------------------------
     import json as jsonmod
-    with open(os.path.join(str(out_dir), "clustering", "k_selection",
+    with open(os.path.join(str(out_dir), "04_ADVANCED_ANALYSIS",
+                           "INTERMEDIATE_RESULTS", "k_selection",
                            "k_selection.json")) as fh:
         krep = jsonmod.load(fh)
     assert krep["k_min"] == 2
@@ -190,8 +202,8 @@ def test_full_pipeline_end_to_end(synth_traj, tmp_path, capsys):
     assert [r["k"] for r in krep["metrics"]] == list(
         range(krep["k_min"], krep["k_max"] + 1))
     # K-based methods all used the selected K
-    with open(os.path.join(str(out_dir), "reports",
-                           "clustering_summary.json")) as fh:
+    with open(os.path.join(str(out_dir), "04_ADVANCED_ANALYSIS",
+                           "INTERMEDIATE_RESULTS", "solution_summary.json")) as fh:
         sols = jsonmod.load(fh)
     k_based = [s for s in sols
                if s["name"].split("/")[0] in {"nani", "divine", "helm"}
@@ -202,62 +214,77 @@ def test_full_pipeline_end_to_end(synth_traj, tmp_path, capsys):
             f"{s['name']} used k={s['n_clusters']}, expected "
             f"{krep['selected_k']}")
 
-    # --- per-method representative frames -------------------------------
-    reps_root = os.path.join(str(out_dir), "representatives",
-                             "representative_frames")
-    families = [d for d in os.listdir(reps_root)
-                if os.path.isdir(os.path.join(reps_root, d))]
-    assert len(families) >= 3, f"too few method folders: {families}"
-    for fam in families:
-        fam_dir = os.path.join(reps_root, fam)
-        pdbs = [f for f in os.listdir(fam_dir) if f.endswith(".pdb")]
-        assert pdbs, f"no PDB representatives in {fam}"
-        assert os.path.isfile(os.path.join(fam_dir, "representatives.csv"))
-        assert any("medoid" in p for p in pdbs), f"no medoid PDB in {fam}"
-    with open(os.path.join(str(out_dir), "representatives",
+    # --- per-method representative poses --------------------------------
+    reps_root = os.path.join(str(out_dir), "02_METHOD_COMPARISON",
+                             "METHOD_REPRESENTATIVES")
+    with open(os.path.join(str(out_dir), "04_ADVANCED_ANALYSIS",
+                           "INTERMEDIATE_RESULTS",
                            "method_representatives.json")) as fh:
         msum = jsonmod.load(fh)
     assert msum["recommendation"] is not None
     assert msum["families"], "no per-family summary written"
     for fam in msum["families"].values():
+        assert fam["directory"] is None  # details are opt-in (--full-output)
         for cl in fam["clusters"]:
             assert cl["medoid_original_frame"] >= 0
             assert cl["medoid_time_ps"] >= 0
+    # default output has no candidate/per-cluster PDBs
+    for adv in ("CANDIDATE_FRAMES", "CLUSTER_MEDOIDS"):
+        d = os.path.join(str(out_dir), "04_ADVANCED_ANALYSIS", adv)
+        assert os.path.isdir(d)
+        assert not [f for f in os.listdir(d) if f.endswith(".pdb")], (
+            f"{adv} should be empty without --full-output")
 
-    # --- cross-method pose comparison ------------------------------------
-    pose_csv = os.path.join(str(out_dir), "representatives",
-                            "pose_comparison.csv")
-    assert os.path.isfile(pose_csv)
+    # --- simplified pose comparison --------------------------------------
+    pose_csv = os.path.join(str(out_dir), "02_METHOD_COMPARISON",
+                            "POSE_RANKING.csv")
     with open(pose_csv) as fh:
         poses = list(csvmod.DictReader(fh))
-    assert poses, "pose_comparison.csv is empty"
-    pose_methods = {r["method"] for r in poses}
-    assert len(pose_methods) >= 3, (
-        f"poses from only {len(pose_methods)} method(s): {pose_methods}")
-    pose_scores = [float(r["final_score"]) for r in poses]
+    assert poses, "POSE_RANKING.csv is empty"
+    assert len({r["Method"] for r in poses}) >= 3
+    pose_scores = [float(r["Final_Composite_Score"]) for r in poses]
     assert pose_scores == sorted(pose_scores, reverse=True)
+    assert [int(r["Rank"]) for r in poses] == list(range(1, len(poses) + 1))
     assert all(0 <= s <= 100 for s in pose_scores)
-    # every pose row names the method it came from
-    assert all(r["method"] and r["family"] for r in poses)
-    for rel in ("representatives/POSE_COMPARISON_REPORT.txt",
-                "reports/METHOD_AND_POSE_SUMMARY.txt"):
-        p = os.path.join(str(out_dir), rel)
-        assert os.path.isfile(p) and os.path.getsize(p) > 0
-    with open(os.path.join(str(out_dir), "representatives",
+    for r in poses:
+        assert r["Method"] and r["Solution"] and r["Original_Frame"]
+        pdb = os.path.join(str(out_dir), r["PDB_File"])
+        assert os.path.isfile(pdb), f"missing per-method PDB: {pdb}"
+    reps_pdbs = [f for f in os.listdir(reps_root) if f.endswith(".pdb")]
+    assert len(reps_pdbs) == len(poses), (
+        f"METHOD_REPRESENTATIVES has {reps_pdbs}, expected {len(poses)}")
+
+    with open(os.path.join(str(out_dir), "04_ADVANCED_ANALYSIS",
+                           "INTERMEDIATE_RESULTS",
                            "method_recommendation.txt")) as fh:
         rec_txt = fh.read()
     assert "CROSS-METHOD POSE COMPARISON" in rec_txt
     assert "pose winner method" in rec_txt
-    with open(os.path.join(str(out_dir), "reports",
+    with open(os.path.join(str(out_dir), "04_ADVANCED_ANALYSIS",
+                           "INTERMEDIATE_RESULTS",
                            "METHOD_AND_POSE_SUMMARY.txt")) as fh:
         summary_txt = fh.read()
     assert "Best method (validation)" in summary_txt
     assert "Best pose (all methods)" in summary_txt
 
+    # --- consolidated METHOD_RANKING.csv --------------------------------
+    mr_path = os.path.join(str(out_dir), "02_METHOD_COMPARISON",
+                           "METHOD_RANKING.csv")
+    with open(mr_path) as fh:
+        mrows = list(csvmod.DictReader(fh))
+    assert mrows
+    for col in ("Rank", "Method", "Status", "N_Clusters",
+                "Cluster_Population_Frames", "Silhouette",
+                "Davies_Bouldin", "Calinski_Harabasz", "Bootstrap_ARI",
+                "Overall_Clustering_Score"):
+        assert col in mrows[0], f"METHOD_RANKING missing {col}"
+    assert all(r["Status"] in ("OK", "FAILED", "SKIPPED") for r in mrows)
+    ok_ranks = [int(r["Rank"]) for r in mrows if r["Status"] == "OK"]
+    assert ok_ranks == list(range(1, len(ok_ranks) + 1))
+
     # --- per-method coverage audit ---------------------------------------
-    cov_path = os.path.join(str(out_dir), "clustering",
-                            "method_coverage.json")
-    assert os.path.isfile(cov_path)
+    cov_path = os.path.join(str(out_dir), "04_ADVANCED_ANALYSIS",
+                            "INTERMEDIATE_RESULTS", "method_coverage.json")
     with open(cov_path) as fh:
         cov = json.load(fh)
     assert set(cov) >= {"nani", "divine", "helm", "equal", "mdbirch",
@@ -267,41 +294,45 @@ def test_full_pipeline_end_to_end(synth_traj, tmp_path, capsys):
                                   "deferred")
         if info["status"] in ("not_run", "degenerate"):
             assert info["reason"], f"{fam} has no reason for being missing"
-    cov_txt = os.path.join(str(out_dir), "reports", "METHOD_COVERAGE.txt")
-    assert os.path.isfile(cov_txt)
+    cov_txt = os.path.join(str(out_dir), "04_ADVANCED_ANALYSIS",
+                           "INTERMEDIATE_RESULTS", "METHOD_COVERAGE.txt")
     with open(cov_txt) as fh:
         cov_body = fh.read()
     for label in ("NANI", "DIVINE", "HELM", "eQual", "mdBIRCH",
                   "Agglomerative", "DBSCAN", "GROMOS"):
         assert label in cov_body, f"{label} missing from coverage report"
-    # every executed method must be usable on this dataset (no silent gaps)
     performed = {f for f in cov if cov[f]["status"] == "usable"}
     assert len(performed) >= 6, f"only {sorted(performed)} produced results"
 
-    # --- final winner file names the method that produced it -------------
-    best_txt = os.path.join(str(out_dir), "reports",
-                            "FINAL_FRAME_SELECTION_REPORT.txt")
-    with open(best_txt) as fh:
-        banner = fh.read()
-    named = re.search(
-        r"representatives/(BEST_REPRESENTATIVE_FRAME_(\S+?)_cluster\d+_frame\d+\.pdb)",
-        banner)
-    assert named, "banner does not reference a method-named winner PDB"
-    assert os.path.isfile(os.path.join(str(out_dir), "representatives",
-                                       named.group(1)))
-    assert re.search(r"BEST_REPRESENTATIVE_FRAME_(NANI|DIVINE|HELM|EQUAL|MDBIRCH|AGGLOMERATIVE|DBSCAN|GROMOS)",
-                     named.group(1)), named.group(1)
-    # cluster ids are 1-based everywhere user-facing
-    banner_cid = re.search(r"Selected Cluster ID\s*:\s*(\d+)", banner)
-    assert banner_cid, "banner has no Selected Cluster ID"
-    assert int(banner_cid.group(1)) >= 1
-    assert f"_cluster{banner_cid.group(1)}_frame" in named.group(1), (
-        f"banner cluster {banner_cid.group(1)} disagrees with {named.group(1)}")
+    # --- final report answers the user's questions -----------------------
+    with open(os.path.join(str(out_dir), "01_FINAL_RESULTS",
+                           "FINAL_REPORT.txt")) as fh:
+        final_txt = fh.read()
+    for phrase in ("Total trajectory frames", "Frames actually analysed",
+                   "Elbow K", "Selected K used by pipeline",
+                   "Why this K was selected", "CLUSTERS PRODUCED BY EACH METHOD",
+                   "BEST CLUSTERING METHOD", "BEST REPRESENTATIVE POSE",
+                   "Original trajectory frame",
+                   "METHODS THAT FAILED OR WERE SKIPPED",
+                   "GROMACS COMPARISON STATUS", "Native gmx cluster"):
+        assert phrase in final_txt, f"FINAL_REPORT missing: {phrase}"
+    assert f"Original trajectory frame : {poses[0]['Original_Frame']}" in final_txt
+    assert f"Elbow K (Kneedle/geometric) : {krep['elbow_k']}" in final_txt
+    assert (f"Selected K used by pipeline : {krep['selected_k']}"
+            in final_txt)
+    with open(os.path.join(str(out_dir), "01_FINAL_RESULTS",
+                           "FINAL_SUMMARY.csv")) as fh:
+        fs = {r["Item"]: r["Value"] for r in csvmod.DictReader(fh)}
+    assert fs["Total trajectory frames"] == "120"
+    assert fs["Frames analysed"] == str(len(pipe.info["frame_indices"]))
+    assert fs["Elbow K"] == str(krep["elbow_k"])
+    assert fs["Selected K"] == str(krep["selected_k"])
+    assert fs["Best pose original frame"] == poses[0]["Original_Frame"]
 
     # --- benchmark CSV schema and statistical comparison -----------------
     from mdance_pipeline.gromacs_bench import BENCH_HEADER
-    bench_csv = os.path.join(str(out_dir), "benchmarking",
-                             "mdance_vs_gromacs.csv")
+    bench_csv = os.path.join(str(out_dir), "02_METHOD_COMPARISON",
+                             "GROMACS_COMPARISON.csv")
     with open(bench_csv) as fh:
         breader = csvmod.reader(fh)
         bheader = next(breader)
@@ -319,60 +350,56 @@ def test_full_pipeline_end_to_end(synth_traj, tmp_path, capsys):
         assert -1.0 <= float(r[bidx["adj_rand_index"]]) <= 1.0
         assert 0.0 <= float(r[bidx["population_L1"]]) <= 1.0
         assert 0.0 <= float(r[bidx["top5_population_divergence"]]) <= 1.0
-    with open(os.path.join(str(out_dir), "benchmarking",
+    with open(os.path.join(str(out_dir), "04_ADVANCED_ANALYSIS",
+                           "INTERMEDIATE_RESULTS",
                            "benchmarking_report.txt")) as fh:
         btxt = fh.read()
     assert "Statistical comparison summary" in btxt
     assert "not a significance test" in btxt
 
-    # --- GROMOS/baseline label files are stored under the right folder ---
-    gdir = os.path.join(str(out_dir), "clustering", "gromos")
-    bdir = os.path.join(str(out_dir), "clustering", "baselines")
+    # --- GROMOS/baseline label files are stored under advanced -----------
+    gdir = os.path.join(str(out_dir), "04_ADVANCED_ANALYSIS",
+                        "INTERMEDIATE_RESULTS", "clustering", "labels",
+                        "gromos")
+    bdir = os.path.join(str(out_dir), "04_ADVANCED_ANALYSIS",
+                        "INTERMEDIATE_RESULTS", "clustering", "labels",
+                        "baselines")
     gfiles = [f for f in os.listdir(gdir) if f.endswith(".npy")]
     bfiles = [f for f in os.listdir(bdir) if f.endswith(".npy")]
     assert any(f.startswith("gromos_") for f in gfiles), (
-        f"no GROMOS partitions in clustering/gromos: {gfiles}")
-    assert bfiles, "no baseline partitions in clustering/baselines"
+        f"no GROMOS partitions in gromos labels: {gfiles}")
+    assert bfiles, "no baseline partitions in baseline labels"
     assert not any(f.startswith(("agglom", "dbscan")) for f in gfiles), (
-        f"baseline labels leaked into clustering/gromos: {gfiles}")
+        f"baseline labels leaked into gromos labels: {gfiles}")
 
-    # --- pose report points at a file that actually exists ---------------
-    with open(os.path.join(str(out_dir), "representatives",
-                           "POSE_COMPARISON_REPORT.txt")) as fh:
-        ptxt = fh.read()
-    pstruct = re.search(
-        r"structure\s*:\s*representatives/(BEST_REPRESENTATIVE_FRAME_\S+\.pdb)",
-        ptxt)
-    assert pstruct, "pose report does not name the winner structure"
-    assert os.path.isfile(os.path.join(str(out_dir), "representatives",
-                                       pstruct.group(1))), (
-        f"pose report points at missing file: {pstruct.group(1)}")
-
-    # banner printed to stdout
-    captured = capsys.readouterr().out
-    assert "FINAL BEST REPRESENTATIVE FRAME" in captured
-    assert "BEST_REPRESENTATIVE_FRAME.pdb" in captured
-
-    # final frame is an actual analysis frame with score within [0, 100]
-    with open(os.path.join(str(out_dir), "reports",
-                           "FINAL_FRAME_SELECTION_REPORT.txt")) as fh:
-        report = fh.read()
-    assert "Selected Frame ID" in report
-    score_match = re.search(r"Final Composite Score\s*:\s*([\d.]+) / 100",
-                            report)
-    assert score_match and 0 <= float(score_match.group(1)) <= 100
-
-    # PDB contains real coordinates of one frame
-    u_pdb = mda.Universe(os.path.join(str(out_dir), "representatives",
-                                      "BEST_REPRESENTATIVE_FRAME.pdb"))
-    assert u_pdb.atoms.n_atoms > 0
-    assert np.isfinite(u_pdb.atoms.positions).all()
-
-    # candidate scores CSV is ranked and finite
-    with open(os.path.join(str(out_dir), "representatives",
+    # --- best pose really is the highest-scoring, correctly mapped frame --
+    with open(os.path.join(str(out_dir), "04_ADVANCED_ANALYSIS",
+                           "INTERMEDIATE_RESULTS",
                            "candidate_frame_scores.csv")) as fh:
         rows = list(csvmod.DictReader(fh))
     assert rows, "candidate_frame_scores.csv is empty"
     scores = [float(r["final_score"]) for r in rows]
     assert all(0 <= s <= 100 for s in scores)
+    assert scores == sorted(scores, reverse=True)
+    assert rows[0]["original_frame"] == poses[0]["Original_Frame"]
+    # preprocessing maps analysis K -> original frame correctly for this run
+    for r in rows:
+        assert int(r["original_frame"]) == 2 + 2 * int(r["analysis_frame"])
+    # BEST_POSE.pdb coordinates equal that processed analysis frame
+    gro = os.path.join(str(out_dir), "05_PREPROCESSING",
+                       "REFERENCE_STRUCTURE", "reference.gro")
+    xtc = os.path.join(str(out_dir), "05_PREPROCESSING",
+                       "PROCESSED_TRAJECTORY", "processed.xtc")
+    u_proc = mda.Universe(gro, xtc)
+    u_proc.trajectory[int(rows[0]["analysis_frame"])]
+    ref_pos = u_proc.atoms.positions.copy()
+    u_pdb = mda.Universe(os.path.join(str(out_dir), "01_FINAL_RESULTS",
+                                      "BEST_POSE.pdb"))
+    assert u_pdb.atoms.n_atoms == len(ref_pos)
+    assert np.allclose(u_pdb.atoms.positions, ref_pos, atol=1e-3)
+
+    # detailed banner printed to stdout still works
+    captured = capsys.readouterr().out
+    assert "FINAL BEST REPRESENTATIVE FRAME" in captured
+    assert "01_FINAL_RESULTS/BEST_POSE.pdb" in captured
     assert scores == sorted(scores, reverse=True)

@@ -191,10 +191,16 @@ def plot_scoring_sensitivity(sens_rows, rows, out_dir, logger,
 
 
 def plot_gromacs_populations(best_labels, gromos_labels, out_dir, logger,
-                             name="gromacs_comparison.png"):
-    fig, axes = plt.subplots(1, 2, figsize=(8.4, 3.4))
-    for ax, (title, lab) in zip(axes, [(f"MDANCE best ({np.max(best_labels)+1} cl)", best_labels),
-                                       ("gromos baseline", gromos_labels)]):
+                             name="gromacs_comparison.png",
+                             native_labels=None):
+    panels = [(f"MDANCE best ({np.max(best_labels)+1} cl)", best_labels),
+              ("MDANCE GROMOS (Daura)", gromos_labels)]
+    if native_labels is not None:
+        panels.append((f"native gmx ({np.max(native_labels)+1} cl)",
+                       native_labels))
+    fig, axes = plt.subplots(1, len(panels), figsize=(4.2 * len(panels), 3.4),
+                             squeeze=False)
+    for ax, (title, lab) in zip(axes[0], panels):
         uniq, counts = np.unique(lab[lab >= 0], return_counts=True)
         ax.bar(np.arange(len(uniq)), counts / counts.sum(), color="#4C72B0")
         ax.set_title(title, fontsize=8)

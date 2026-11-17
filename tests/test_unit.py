@@ -145,6 +145,84 @@ def test_helm_initial_partition_can_exceed_small_n():
     assert len(np.unique(labels)) == 6
 
 
+def test_gmx_clid_parser_and_cutoff_conversion(tmp_path):
+    from mdance_pipeline import gromacs_bench
+    p = tmp_path / "clid.xvg"
+    p.write_text("# gmx cluster\n@ title \"x\"\n0.0 1\n1.0 1\n2.0 2\n3.0 2\n")
+    labels, n = gromacs_bench.parse_clid_xvg(str(p), 4)
+    assert n == 2
+    assert labels.tolist() == [0, 0, 1, 1]
+    # MDANCE MSD is in Angstrom^2/(2N): RMSD(A)=sqrt(2*MSD), nm = A/10
+    assert abs(gromacs_bench.msd_to_rmsd_nm(0.5) - 0.1) < 1e-12
+    assert gromacs_bench.native_solution(None) is None
+    sol = gromacs_bench.native_solution({
+        "success": True, "labels": np.array([0, 0, 1, 1]),
+        "n_clusters": 2, "cutoff_nm": 0.1, "time_s": 1.2,
+        "selection": "protein and backbone", "n_atoms": 48})
+    assert sol is not None and sol.family == "gmx_native"
+    assert sol.n_clusters == 2
+
+
+def test_benchmark_table_includes_native_gmx_row():
+    from types import SimpleNamespace
+    from mdance_pipeline import gromacs_bench
+    from mdance_pipeline.clustering import Solution
+    X, N = make_two_cluster_data(n=8, seed=2)
+    D = features.msd_pairwise_chunked(X, N, chunk_size=8, dtype=np.float64)
+    labels = np.array([0] * 8 + [1] * 8)
+    sol = Solution(name="nani/test/k2", family="nani", params={},
+                   labels=labels, n_clusters=2, time_s=0.1, mem_mb=1.0,
+                   native=True)
+    best = SimpleNamespace(name=sol.name, n_clusters=2, time_s=0.1,
+                           mem_mb=1.0, compactness=0.1, separation=1.0,
+                           family="nani")
+    native = {"success": True, "labels": labels, "n_clusters": 2,
+              "cutoff_nm": 0.2, "time_s": 0.3, "selection": "backbone",
+              "n_atoms": 6, "returncode": 0, "error": None}
+    rows, report = gromacs_bench.benchmark_table(
+        best, {"native": native, "solutions": []}, [sol], {}, D=D)
+    nrow = [r for r in rows if str(r[0]).startswith("native_gmx:")]
+    assert len(nrow) == 1
+    assert len(nrow[0]) == len(gromacs_bench.BENCH_HEADER)
+    assert nrow[0][1] == 2 and nrow[0][-1] == 1.0
+    assert any("Native gmx cluster SUCCEEDED" in line for line in report)
+
+
+def test_gmx_clid_parser_rejects_wrong_frame_count(tmp_path):
+    from mdance_pipeline import gromacs_bench
+    p = tmp_path / "clid.xvg"
+    p.write_text("0.0 1\n1.0 2\n")
+    with pytest.raises(ValueError):
+        gromacs_bench.parse_clid_xvg(str(p), 3)
+
+
+def test_family_status_marks_failures_and_skips():
+    from mdance_pipeline.pipeline import Pipeline
+    assert Pipeline._family_status({"status": "degenerate"}) == "FAILED"
+    assert Pipeline._family_status({"status": "not_run",
+                                    "reason": "no solution produced"}) == "FAILED"
+    assert Pipeline._family_status({"status": "not_run",
+                                    "reason": "benchmark.enabled: false"}) == "SKIPPED"
+    assert Pipeline._family_status({"status": "not_run",
+                                    "reason": "helm_enabled: false"}) == "SKIPPED"
+    assert Pipeline._family_status({"status": "deferred"}) == "SKIPPED"
+    assert Pipeline._family_status({"status": "not_run",
+                                    "reason": "gmx binary not found"}) == "SKIPPED"
+
+
+def test_output_layout_creates_simplified_tree(tmp_path):
+    from mdance_pipeline import output_layout
+    output_layout.ensure_tree(str(tmp_path))
+    for sub in ("01_FINAL_RESULTS", "02_METHOD_COMPARISON",
+                "02_METHOD_COMPARISON/METHOD_REPRESENTATIVES", "03_PLOTS",
+                "04_ADVANCED_ANALYSIS/CANDIDATE_FRAMES",
+                "04_ADVANCED_ANALYSIS/CLUSTER_MEDOIDS",
+                "04_ADVANCED_ANALYSIS/SENSITIVITY_ANALYSIS",
+                "05_PREPROCESSING/PROCESSED_TRAJECTORY",
+                "05_PREPROCESSING/REFERENCE_STRUCTURE"):
+        assert os.path.isdir(tmp_path / sub), f"missing folder: {sub}"
+
+
 def test_unwrap_transform_version_fallback(monkeypatch):
     """MDAnalysis >= 2.9 removed unwrap(compound=...); fall back cleanly."""
     calls = []

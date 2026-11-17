@@ -2,8 +2,9 @@
 
 ## 1. Automatic K selection (Elbow / Kneedle)
 
-`k_selection.enabled: true` (default) runs **before** the clustering sweep in
-`clustering/k_selection/`:
+`k_selection.enabled: true` (default) runs **before** the clustering sweep.
+The primary plot is `03_PLOTS/K_SELECTION.png`; the full scan is written to
+`04_ADVANCED_ANALYSIS/INTERMEDIATE_RESULTS/k_selection/`:
 
 * `k_selection.csv` — one row per K: dispersion, n_clusters, n_singletons,
   silhouette, distance-space Davies–Bouldin, distance-space
@@ -81,41 +82,45 @@ This costs one full K sweep per method, so it is **off by default**.
 
 ## 2. Representative frames for every method
 
-`representatives.export_all_methods: true` (default) writes, for each method
-that produced at least one partition with ≥ 2 clusters:
+`representatives.export_all_methods: true` (default) compares every method
+that produced at least one partition with ≥ 2 clusters. The winning pose of
+each method is written once to:
 
 ```
-representatives/representative_frames/
-├── NANI/            cluster_001_medoid.pdb, cluster_001_centroid.pdb, representatives.csv
-├── DIVINE/          ...
-├── HELM/            ...
-├── Agglomerative/   ...
-├── eQual/           ...   (when the threshold sweep yields ≥ 2 clusters)
-├── mdBIRCH/         ...
-├── DBSCAN/          ...
-└── GROMOS/          ...   (from the GROMACS benchmark sweep)
+02_METHOD_COMPARISON/METHOD_REPRESENTATIVES/
+├── NANI.pdb
+├── DIVINE.pdb
+├── HELM.pdb
+├── Agglomerative.pdb
+├── eQual.pdb
+├── mdBIRCH.pdb
+├── DBSCAN.pdb
+└── GROMOS.pdb        (from the GROMACS benchmark sweep)
 ```
 
-Each `representatives.csv` records, per cluster: population, population
-fraction, medoid analysis frame, **original trajectory frame**, simulation
-time (ps), nearest-to-centroid frame/original frame/time, and the MSD between
-them. Every PDB is a real trajectory frame (PBC-corrected, reference-aligned
-by preprocessing), never an averaged centroid.
+`02_METHOD_COMPARISON/POSE_RANKING.csv` records, per method: cluster ID,
+**original trajectory frame**, representative type, all six component scores,
+the final composite score and the PDB path. Every PDB is a real trajectory
+frame (PBC-corrected, reference-aligned by preprocessing), never an averaged
+centroid.
 
-The chosen solution per method is the best validation-ranked one of that
-method; `method_representatives.json` records the choice and, for methods with
+Per-cluster medoid/nearest-to-centroid PDBs and `representatives.csv` are
+optional and go to `04_ADVANCED_ANALYSIS/CLUSTER_MEDOIDS/<METHOD>/` with
+`--full-output`. The chosen solution per method is the best validation-ranked
+one; `method_representatives.json` records the choice and, for methods with
 only degenerate partitions (e.g. eQual returning a single cluster), the reason
 nothing was exported.
 
 ## 2b. Method coverage: why a method produced nothing
 
-Every run writes `clustering/method_coverage.json` and
-`reports/METHOD_COVERAGE.txt`. For each of NANI, DIVINE, HELM, eQual, mdBIRCH,
-Agglomerative, DBSCAN and GROMOS they record `status` (`usable`, `degenerate`,
-`not_run`, `deferred`), the number of solutions, how many are usable, the set of
-cluster counts produced, failed-run count, and a human-readable `reason`. The
-same reasons appear in the log (`method coverage <name> ...`) and in
-`representatives/method_representatives.json -> skipped`, so a method can no
+Every run writes `method_coverage.json` and `METHOD_COVERAGE.txt` under
+`04_ADVANCED_ANALYSIS/INTERMEDIATE_RESULTS/`. For each of NANI, DIVINE, HELM,
+eQual, mdBIRCH, Agglomerative, DBSCAN and GROMOS they record `status`
+(`usable`, `degenerate`, `not_run`, `deferred`), the number of solutions, how
+many are usable, the set of cluster counts produced, failed-run count, and a
+human-readable `reason`. The same reasons appear in the log (method coverage)
+and in `method_representatives.json -> skipped`, and are surfaced as
+FAILED/SKIPPED in `02_METHOD_COMPARISON/METHOD_RANKING.csv`, so a method can no
 longer disappear silently.
 
 To keep the threshold/density methods from degenerating on real trajectories:
@@ -142,20 +147,20 @@ representative poses compete in one ranked table**. For each method the chosen
 solution's clusters contribute their medoid and (when it differs) the frame
 nearest the centroid, giving up to `2 * n_clusters` poses per method:
 
-* `representatives/pose_comparison.csv` — ranked rows with `method`, `family`,
-  `kind`, `method_k`, cluster, population, analysis/original frame, time, the
-  six component scores and `final_score`;
-* `representatives/POSE_COMPARISON_REPORT.txt` — best pose per method plus the
-  overall winner;
-* `representatives/candidate_frames/*.pdb` — one PDB per compared pose, named
-  `score<...>_<METHOD>_cluster<N>_frame<orig>.pdb`;
-* `representatives/BEST_REPRESENTATIVE_FRAME.pdb` and the final banner — the
-  winning pose, **whatever method produced it**.
+* `04_ADVANCED_ANALYSIS/INTERMEDIATE_RESULTS/pose_candidates_all.csv` — all
+  ranked rows with `method`, `family`, `kind`, `method_k`, cluster, population,
+  analysis/original frame, time, the six component scores and `final_score`;
+* `04_ADVANCED_ANALYSIS/INTERMEDIATE_RESULTS/POSE_COMPARISON_REPORT.txt` —
+  best pose per method plus the overall winner;
+* `04_ADVANCED_ANALYSIS/CANDIDATE_FRAMES/*.pdb` — one PDB per compared pose
+  (only with `--full-output`);
+* `02_METHOD_COMPARISON/POSE_RANKING.csv` — one best pose per successful
+  method with its PDB path;
+* `01_FINAL_RESULTS/BEST_POSE.pdb` — the winning pose, **whatever method
+  produced it**.
 
-Output filenames state the method that produced them:
-`BEST_REPRESENTATIVE_FRAME_<METHOD>_cluster<N>_frame<orig>.pdb` (with
-`BEST_REPRESENTATIVE_FRAME.pdb` kept as a stable alias) and
-`RECOMMENDED_METHOD_FRAME_<METHOD>_<params>_cluster<N>_frame<orig>.pdb`.
+The recommended-method pose is `01_FINAL_RESULTS/BEST_METHOD.pdb`; the final
+plain-language report is `01_FINAL_RESULTS/FINAL_REPORT.txt`.
 
 Each pose is scored inside **its own** method's partition: population,
 representativeness (distance to that cluster's medoid), stability and quality
@@ -165,14 +170,15 @@ candidate set.
 
 ## 4. Independent method recommendation
 
-`representatives/method_recommendation.txt` and
-`representatives/RECOMMENDED_METHOD_FRAME.pdb` give the top
-validation-ranked method and the medoid of its largest cluster, and the same
-file records whether the cross-method pose winner came from that method.
-`reports/METHOD_AND_POSE_SUMMARY.txt` states both answers together:
+`04_ADVANCED_ANALYSIS/INTERMEDIATE_RESULTS/method_recommendation.txt` and
+`01_FINAL_RESULTS/BEST_METHOD.pdb` give the top validation-ranked method and
+the medoid of its largest cluster; the same file records whether the
+cross-method pose winner came from that method.
+`METHOD_AND_POSE_SUMMARY.txt` states both answers together:
 
 1. **best method** by cluster validation (ranking in
-   `clustering/clustering_summary.csv`), with its representative structure;
+   `02_METHOD_COMPARISON/METHOD_RANKING.csv`), with its representative
+   structure;
 2. **best pose** by the composite frame score across all methods, with its
    frame indices, time and score, plus `same method as above: YES/NO`.
 

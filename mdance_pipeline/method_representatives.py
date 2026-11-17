@@ -1,17 +1,19 @@
 """Per-method representative extraction + independent method recommendation.
 
-Requirement implemented here: representative frames are extracted for EVERY
-clustering method, not only for the winner. For each method family the
-best-ranked solution of that family is taken (parameter variants of one family
-are alternatives of the same method) and, for each of its clusters, the medoid
-frame and the nearest-to-centroid frame are written as individual PDB files.
+Representative frames are compared for EVERY clustering method, not only the
+winner. For each method family the best-ranked solution is taken (parameter
+variants are alternatives of the same method). The winning pose of every
+successful method is exported once under
+`02_METHOD_COMPARISON/METHOD_REPRESENTATIVES/<METHOD>.pdb`; with
+`--full-output`, every cluster's medoid and nearest-to-centroid frame are
+also written under `04_ADVANCED_ANALYSIS/CLUSTER_MEDOIDS/<METHOD>/`.
 
 Every exported structure is an ACTUAL trajectory frame (PBC-corrected and
 reference-aligned by preprocessing); the original trajectory frame index and
 simulation time are preserved in the CSV/JSON metadata next to the PDBs.
 
 The recommendation of the best method is produced independently of the
-composite representative-frame score (`BEST_REPRESENTATIVE_FRAME.pdb`).
+composite representative-frame score (`01_FINAL_RESULTS/BEST_POSE.pdb`).
 """
 from __future__ import annotations
 
@@ -22,7 +24,7 @@ import re
 
 import numpy as np
 
-from mdance_pipeline import representatives as reps
+from mdance_pipeline import output_layout, representatives as reps
 from mdance_pipeline.utils import frame_meta
 
 # Filesystem-safe, human-readable folder names per family
@@ -35,6 +37,7 @@ FAMILY_DIRS = {
     "agglom": "Agglomerative",
     "dbscan": "DBSCAN",
     "gromos": "GROMOS",
+    "gmx_native": "GROMACS_native",
 }
 
 
@@ -123,6 +126,13 @@ def collect_method_candidates(pipe) -> tuple[dict, list[dict]]:
                   abs(cur[1].n_clusters - (selected_k or sol.n_clusters)))
         if better:
             chosen[key] = (None, sol)
+    # Native GROMACS is a benchmark tier, but its real membership can also
+    # contribute a representative pose and a method-comparison row.
+    from mdance_pipeline import gromacs_bench
+    nsol = gromacs_bench.native_solution(
+        (pipe.bench_results or {}).get("native"))
+    if nsol is not None and nsol.n_clusters >= 2:
+        chosen["gmx_native"] = (None, nsol)
 
     write_centroid = bool(
         pipe.cfg["representatives"].get("nearest_to_centroid", True))
@@ -158,15 +168,22 @@ def collect_method_candidates(pipe) -> tuple[dict, list[dict]]:
 
 
 def export_all_methods(pipe) -> dict:
-    """Write representatives/representative_frames/<METHOD>/ for every family.
+    """Summarise every method and write the recommended-method pose.
+
+    Only one representative PDB per successful method is written to the main
+    tree (``02_METHOD_COMPARISON/METHOD_REPRESENTATIVES``), chosen later from
+    the scored candidates. Per-cluster medoid/centroid PDBs are optional and
+    go to ``04_ADVANCED_ANALYSIS/CLUSTER_MEDOIDS`` with ``--full-output``.
 
     Returns a summary dict: chosen solution per family and the recommendation.
     """
     log = pipe.logger
     N = pipe.info["n_atoms_selected"]
     X, D = pipe.dist["X"], pipe.dist["D"]
-    root = os.path.join(pipe.out_dir, "representatives", "representative_frames")
-    os.makedirs(root, exist_ok=True)
+    full_output = bool(pipe.cfg["system"].get("full_output", False))
+    root = os.path.join(pipe.out_dir, output_layout.MEDOID_DIR)
+    if full_output:
+        os.makedirs(root, exist_ok=True)
     write_centroid = bool(
         pipe.cfg["representatives"].get("nearest_to_centroid", True))
 
@@ -181,7 +198,8 @@ def export_all_methods(pipe) -> dict:
             continue
         name = _family_root(family)
         dest = os.path.join(root, name)
-        os.makedirs(dest, exist_ok=True)
+        if full_output:
+            os.makedirs(dest, exist_ok=True)
         rows = []
         for cid in sorted(stats):
             st = stats[cid]
@@ -189,15 +207,16 @@ def export_all_methods(pipe) -> dict:
             near = int(st["nearest_to_centroid"])
             med_meta = frame_meta(pipe.info, med)
             near_meta = frame_meta(pipe.info, near)
-            reps.write_frame_pdb(
-                pipe.info, med,
-                os.path.join(dest, f"cluster_{cid + 1:03d}_medoid.pdb"),
-                logger=log)
-            if write_centroid:
+            if full_output:
                 reps.write_frame_pdb(
-                    pipe.info, near,
-                    os.path.join(dest, f"cluster_{cid + 1:03d}_centroid.pdb"),
+                    pipe.info, med,
+                    os.path.join(dest, f"cluster_{cid + 1:03d}_medoid.pdb"),
                     logger=log)
+                if write_centroid:
+                    reps.write_frame_pdb(
+                        pipe.info, near,
+                        os.path.join(dest, f"cluster_{cid + 1:03d}_centroid.pdb"),
+                        logger=log)
             rows.append({
                 "cluster_id": cid + 1,
                 "population": st["population"],
@@ -210,11 +229,12 @@ def export_all_methods(pipe) -> dict:
                 "nearest_centroid_time_ps": near_meta["time_ps"],
                 "msd_medoid_to_centroid": round(float(D[med, near]), 6),
             })
-        with open(os.path.join(dest, "representatives.csv"), "w",
-                  newline="") as fh:
-            wr = csv.DictWriter(fh, fieldnames=list(rows[0]))
-            wr.writeheader()
-            wr.writerows(rows)
+        if full_output:
+            with open(os.path.join(dest, "representatives.csv"), "w",
+                      newline="") as fh:
+                wr = csv.DictWriter(fh, fieldnames=list(rows[0]))
+                wr.writeheader()
+                wr.writerows(rows)
         summary["families"][name] = {
             "solution": sol.name,
             "family": family,
@@ -229,12 +249,12 @@ def export_all_methods(pipe) -> dict:
                 if metric is not None else
                 "all ranked partitions of this method were degenerate; "
                 "closest usable solution used"),
-            "directory": os.path.relpath(dest, pipe.out_dir),
+            "directory": (output_layout.rel(pipe.out_dir, dest)
+                          if full_output else None),
             "clusters": rows,
         }
-        log.info("Representatives exported for %-14s (%s): %d clusters -> %s",
-                 name, sol.name, len(stats),
-                 os.path.relpath(dest, pipe.out_dir))
+        log.info("Representatives summarised for %-14s (%s): %d clusters",
+                 name, sol.name, len(stats))
 
     # Methods that produced no usable (>=2 cluster) partition are reported
     # explicitly instead of being silently absent from the tree.
@@ -275,15 +295,9 @@ def export_all_methods(pipe) -> dict:
             cid = max(top_stats, key=lambda c: top_stats[c]["population"])
             frame = int(top_stats[cid]["medoid_frame"])
             meta = frame_meta(pipe.info, frame)
-            out_pdb = os.path.join(pipe.out_dir, "representatives",
-                                   "RECOMMENDED_METHOD_FRAME.pdb")
+            out_pdb = os.path.join(pipe.out_dir, output_layout.FINAL_DIR,
+                                   "BEST_METHOD.pdb")
             reps.write_frame_pdb(pipe.info, frame, out_pdb, logger=log)
-            # self-describing copy: names the method that produced the frame
-            named = os.path.join(
-                pipe.out_dir, "representatives",
-                f"RECOMMENDED_METHOD_FRAME_{method_slug(top.name)}"
-                f"_cluster{cid + 1}_frame{meta['original_frame']}.pdb")
-            reps.write_frame_pdb(pipe.info, frame, named, logger=None)
             summary["recommendation"] = {
                 "method": top.name,
                 "family": top.family,
@@ -300,10 +314,10 @@ def export_all_methods(pipe) -> dict:
                 "note": ("Medoid (actual trajectory frame) of the largest "
                          "cluster of the top validation-ranked method. "
                          "Independent of the composite frame score in "
-                         "BEST_REPRESENTATIVE_FRAME.pdb."),
+                         "01_FINAL_RESULTS/BEST_POSE.pdb."),
             }
             emp = ""
-    with open(os.path.join(pipe.out_dir, "representatives",
+    with open(os.path.join(pipe.out_dir, output_layout.INTERMEDIATE_DIR,
                            "method_recommendation.txt"), "w") as fh:
         if summary["recommendation"]:
             r = summary["recommendation"]
@@ -320,8 +334,7 @@ def export_all_methods(pipe) -> dict:
                 rank = (f"#{fam['validation_rank']}"
                         if fam["validation_rank"] is not None else "n/a")
                 fh.write(f"  {name:<14} {fam['solution']:<34} "
-                         f"k={fam['n_clusters']:<3} rank={rank:<4} "
-                         f"{fam['directory']}/\n")
+                         f"k={fam['n_clusters']:<3} rank={rank:<4}\n")
             if summary["skipped"]:
                 fh.write("\nMethods with no usable partition (nothing to "
                          "export):\n")
@@ -330,7 +343,7 @@ def export_all_methods(pipe) -> dict:
                              f"(cluster counts: {info['cluster_counts']})\n")
         else:
             fh.write(emp + "\n")
-    with open(os.path.join(pipe.out_dir, "representatives",
+    with open(os.path.join(pipe.out_dir, output_layout.INTERMEDIATE_DIR,
                            "method_representatives.json"), "w") as fh:
         json.dump(summary, fh, indent=2, default=str)
     return summary

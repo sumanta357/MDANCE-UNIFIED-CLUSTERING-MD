@@ -62,16 +62,16 @@ analysis, or figure preparation — not the clustering itself.
 
 | Phase | What happens | Main outputs |
 |---|---|---|
-| 1–2 Preprocess | Load, validate, PBC, center, align, filter frames | `preprocessing/` |
-| 3 Features | Build the MDANCE MSD matrix | `features/` |
-| 3b K selection | Elbow scan over K = 2..15 | `clustering/k_selection/` |
-| 4 Clustering | Run all eight methods | `clustering/` |
-| 5 Validation | Score and rank every solution | `clustering/clustering_summary.csv` |
-| 6 Benchmark | GROMOS/Daura sweep vs the best solution | `benchmarking/` |
-| 7 Representatives | Medoid + nearest-centroid PDBs per method | `representatives/` |
-| 8–9 Pose scoring | Score all representative poses 0–100 | `representatives/pose_comparison.csv` |
-| 10 Plots | Population, silhouette, PCA, rankings | `plots/` |
-| 11–12 Reports | Final banner and complete report | `reports/` |
+| 1–2 Preprocess | Load, validate, PBC, center, align, filter frames | `05_PREPROCESSING/` |
+| 3 Features | Build the MDANCE MSD matrix | `04_ADVANCED_ANALYSIS/INTERMEDIATE_RESULTS/features/` |
+| 3b K selection | Elbow scan over K = 2..15 | `03_PLOTS/K_SELECTION.png` + `04_ADVANCED_ANALYSIS/INTERMEDIATE_RESULTS/k_selection/` |
+| 4 Clustering | Run all eight methods | `02_METHOD_COMPARISON/METHOD_RANKING.csv` |
+| 5 Validation | Score and rank every solution | `04_ADVANCED_ANALYSIS/INTERMEDIATE_RESULTS/solution_metrics.csv` |
+| 6 Benchmark | GROMOS/Daura sweep vs the best solution | `02_METHOD_COMPARISON/GROMACS_COMPARISON.csv` |
+| 7 Representatives | Best representative pose per method | `02_METHOD_COMPARISON/METHOD_REPRESENTATIVES/` |
+| 8–9 Pose scoring | Score all representative poses 0–100 | `02_METHOD_COMPARISON/POSE_RANKING.csv` |
+| 10 Plots | Four primary plots + diagnostics | `03_PLOTS/` + `04_ADVANCED_ANALYSIS/DIAGNOSTIC_PLOTS/` |
+| 11–12 Reports | Final plain-language report | `01_FINAL_RESULTS/` |
 
 ---
 
@@ -103,7 +103,8 @@ pipeline estimates K from the data instead of using a fixed value:
    distance-space Calinski–Harabasz, and bootstrap-ARI stability.
 
 The scan range, the elbow, the ambiguity flag, every K's metrics, and the
-selection rule are all written to `clustering/k_selection/k_selection.json`
+selection rule are all written to
+`04_ADVANCED_ANALYSIS/INTERMEDIATE_RESULTS/k_selection/k_selection.json`
 and `.csv`, with a plot in `k_selection_elbow.png`.
 
 ### Which methods use K?
@@ -233,7 +234,8 @@ between them (`inter`), or a mix (`half`).
 where k-means initially placed centres.
 
 **Watch out:** it is the most expensive native method. Above
-`helm_max_frames` it is skipped and `reports/METHOD_COVERAGE.txt` says so.
+`helm_max_frames` it is skipped and
+`04_ADVANCED_ANALYSIS/INTERMEDIATE_RESULTS/METHOD_COVERAGE.txt` says so.
 It also cannot merge a starting partition that already has only one cluster.
 
 ---
@@ -311,7 +313,9 @@ transitional frames unassigned.
 
 **Watch out:** the result depends strongly on *t*. Read the threshold in the
 solution name and compare several thresholds in
-`clustering/clustering_summary.csv`; do not treat one eQual row as definitive.
+`02_METHOD_COMPARISON/METHOD_RANKING.csv` and the solution-level
+`04_ADVANCED_ANALYSIS/INTERMEDIATE_RESULTS/solution_metrics.csv`; do not treat
+one eQual row as definitive.
 
 ---
 
@@ -399,7 +403,9 @@ the centre of a cluster containing all its neighbours; those frames are
 removed; repeat. It is deterministic and uses no random seed.
 
 GROMOS runs in the **benchmark phase**, not the ordinary clustering sweep, and
-its partitions are saved under `clustering/gromos/`. They also participate in
+its partitions are saved under
+`04_ADVANCED_ANALYSIS/INTERMEDIATE_RESULTS/clustering/labels/gromos/`. They
+also participate in
 the cross-method pose comparison and get their own representative frames.
 
 **Strengths:** directly comparable to a standard GROMACS workflow, and a good
@@ -458,8 +464,10 @@ Details that matter:
 * The winner here is the **recommended method**, not necessarily the source of
   the final frame. See section 8.
 
-Results: `clustering/clustering_summary.csv` (all metrics and ranks) and
-`reports/clustering_summary.csv` / `.json` (execution status).
+Results: `02_METHOD_COMPARISON/METHOD_RANKING.csv` (one row per method, with
+FAILED/SKIPPED states) and
+`04_ADVANCED_ANALYSIS/INTERMEDIATE_RESULTS/solution_metrics.csv` (every
+parameter variant with all metrics and ranks).
 
 ---
 
@@ -487,17 +495,28 @@ about 0 means agreement no better than chance; negative means worse than
 chance. ARI is **descriptive**, not a significance test — the report says this
 explicitly. There are no p-values.
 
-### Tier 2 — native `gmx cluster` (optional)
+### Tier 2 — native `gmx cluster`
 
-If a `gmx` binary is available, the pipeline also runs
-`gmx cluster -method gromos`. Its cutoff is converted from MDANCE MSD to an
-RMSD cutoff in nm (`RMSD = sqrt(2 * MSD)`), because `gmx` expects RMSD.
-Native membership is **not** parsed or claimed equivalent: `gmx` uses its own
-superposition and RMSD definition, so this tier is qualitative and its log is
-kept in `benchmarking/`.
+If a `gmx` binary is available, the pipeline runs
+`gmx cluster -method gromos` automatically on inputs built from exactly the
+MDANCE analysis atom selection (structure + trajectory + index group). Its
+cutoff is converted from the MDANCE MSD units of the distance matrix to an
+RMSD cutoff in nm (`RMSD_nm = sqrt(2 * MSD_A^2) / 10`), because `gmx` expects
+nm. Per-frame native membership is parsed from the `-clid` XVG, so the native
+partition receives the same ARI / population-L1 / top-5 comparison against
+the best MDANCE solution as the GROMOS tier. The detailed `-g` log and all
+gmx output files are kept in
+`04_ADVANCED_ANALYSIS/INTERMEDIATE_RESULTS/gromacs_benchmark/`.
 
-Files: `benchmarking/mdance_vs_gromacs.csv` and
-`benchmarking/benchmarking_report.txt`.
+Native GROMACS uses its own RMSD/superposition definition and is reported as
+a separate row/tier, never mixed into the MDANCE GROMOS row. A failed native
+run is reported as FAILED with its error and is never counted as a successful
+benchmark. Configure the native cutoff with
+`benchmark.native_gmx_cutoff_quantile` or override it with
+`benchmark.native_gmx_cutoff_nm`.
+
+Files: `02_METHOD_COMPARISON/GROMACS_COMPARISON.csv` and
+`04_ADVANCED_ANALYSIS/INTERMEDIATE_RESULTS/benchmarking_report.txt`.
 
 ---
 
@@ -514,10 +533,12 @@ Both are actual trajectory frames with PBC correction and alignment applied.
 A centroid itself is never written as a structure.
 
 Every method that produced at least one partition with two or more clusters
-gets its own directory: `representatives/representative_frames/<METHOD>/`,
-containing
-`cluster_NNN_medoid.pdb`, `cluster_NNN_centroid.pdb`, and a
-`representatives.csv` with population, original frame index, and time.
+contributes its single highest-scoring representative to
+`02_METHOD_COMPARISON/METHOD_REPRESENTATIVES/<METHOD>.pdb` (one row per method
+in `POSE_RANKING.csv`). With `--full-output`, the per-cluster
+`cluster_NNN_medoid.pdb` / `cluster_NNN_centroid.pdb` files and a
+`representatives.csv` are also written under
+`04_ADVANCED_ANALYSIS/CLUSTER_MEDOIDS/<METHOD>/`.
 
 ### The six pose metrics
 
@@ -542,14 +563,12 @@ score (60) so a singleton cannot win on popularity alone.
 The pipeline deliberately reports **two independent results**:
 
 1. **Recommended method** — the best cluster-quality ranking from section 6.
-   Its representative frame is
-   `representatives/RECOMMENDED_METHOD_FRAME_<METHOD>_...pdb`.
+   Its representative frame is `01_FINAL_RESULTS/BEST_METHOD.pdb`.
 2. **Best pose** — the highest composite frame score across *all* methods.
-   Its file is `representatives/BEST_REPRESENTATIVE_FRAME_<METHOD>_cluster<N>_frame<orig>.pdb`,
-   with `BEST_REPRESENTATIVE_FRAME.pdb` kept as a stable alias.
+   Its file is `01_FINAL_RESULTS/BEST_POSE.pdb`.
 
-`reports/METHOD_AND_POSE_SUMMARY.txt` states both, and whether the same method
-produced them. A disagreement is informative: it means the method with the
+`04_ADVANCED_ANALYSIS/INTERMEDIATE_RESULTS/METHOD_AND_POSE_SUMMARY.txt` states
+both, and whether the same method produced them. A disagreement is informative: it means the method with the
 best overall cluster structure did not contain the single most representative
 frame.
 
@@ -561,7 +580,8 @@ partition agreement, not the tie order, to choose a method.
 ### Sensitivity
 
 Weights are perturbed 120 times (Dirichlet draws around the configured
-weights). `scoring/sensitivity_analysis.csv` records which frame wins in each
+weights). `04_ADVANCED_ANALYSIS/SENSITIVITY_ANALYSIS/sensitivity_analysis.csv`
+records which frame wins in each
 draw. If one frame wins most draws, the choice is robust to weight assumptions;
 if the wins are spread out, the ranking is genuinely uncertain.
 
@@ -570,46 +590,63 @@ if the wins are spread out, the ranking is genuinely uncertain.
 ## 9. Output files: what to read first
 
 ```
-DDX17_MDANCE_Analysis/
-├── preprocessing/          processed trajectory + preprocessing_report.txt
-├── features/               feature_data.npy, distance_matrix.npy
-├── clustering/
-│   ├── k_selection/        elbow scan, JSON summary, plot
-│   ├── mdance/             label arrays for native methods
-│   ├── baselines/          label arrays for Agglomerative / DBSCAN
-│   ├── gromos/             label arrays for the GROMOS cutoff sweep
-│   ├── optimal_clustering/ labels.npy + model_card.txt of the top-ranked solution
-│   ├── clustering_summary.csv
-│   └── method_coverage.json
-├── benchmarking/           mdance_vs_gromacs.csv + benchmarking_report.txt
-├── representatives/
-│   ├── representative_frames/<METHOD>/
-│   ├── cluster_representatives/
-│   ├── candidate_frames/
-│   ├── BEST_REPRESENTATIVE_FRAME_<METHOD>_cluster<N>_frame<orig>.pdb
-│   ├── BEST_REPRESENTATIVE_FRAME.pdb          (stable alias)
-│   ├── RECOMMENDED_METHOD_FRAME_<METHOD>_...pdb
-│   ├── pose_comparison.csv
-│   ├── POSE_COMPARISON_REPORT.txt
-│   └── method_representatives.json
-├── scoring/                scoring_metrics.csv, weights, sensitivity
-├── plots/                  PNG figures
-├── reports/
-│   ├── FINAL_FRAME_SELECTION_REPORT.txt       ← start here
-│   ├── METHOD_AND_POSE_SUMMARY.txt
-│   ├── METHOD_COVERAGE.txt
-│   └── complete_analysis_report.txt
+MDANCE_Analysis/
+├── README.txt                    where to look first
+├── 01_FINAL_RESULTS/
+│   ├── FINAL_REPORT.txt          ← start here (plain language)
+│   ├── FINAL_SUMMARY.csv         key numbers
+│   ├── BEST_POSE.pdb             highest-scoring pose
+│   └── BEST_METHOD.pdb           recommended-method pose
+├── 02_METHOD_COMPARISON/
+│   ├── METHOD_RANKING.csv        one row per method, incl. FAILED/SKIPPED
+│   ├── POSE_RANKING.csv          best pose per successful method
+│   ├── CLUSTER_POPULATION.csv
+│   ├── GROMACS_COMPARISON.csv
+│   └── METHOD_REPRESENTATIVES/<METHOD>.pdb
+├── 03_PLOTS/
+│   ├── K_SELECTION.png
+│   ├── CLUSTER_COMPARISON.png
+│   ├── POSE_RANKING.png
+│   └── GROMACS_COMPARISON.png
+├── 04_ADVANCED_ANALYSIS/
+│   ├── CANDIDATE_FRAMES/        all candidates (--full-output)
+│   ├── CLUSTER_MEDOIDS/         per-cluster PDBs (--full-output)
+│   ├── SENSITIVITY_ANALYSIS/
+│   ├── DIAGNOSTIC_PLOTS/
+│   └── INTERMEDIATE_RESULTS/
+│       ├── k_selection/         elbow CSV/JSON + original plot
+│       ├── features/            feature matrix + distance matrix
+│       ├── clustering/          label arrays + optimal model card
+│       ├── solution_metrics.csv / solution_summary.csv / .json
+│       ├── candidate_frame_scores.csv / pose_candidates_all.csv
+│       ├── METHOD_COVERAGE.txt / method_coverage.json
+│       ├── method_recommendation.txt / method_representatives.json
+│       ├── scoring_weights.yaml / scoring_metrics.csv
+│       ├── benchmarking_report.txt
+│       ├── FINAL_FRAME_SELECTION_REPORT.txt
+│       └── complete_analysis_report.txt
+├── 05_PREPROCESSING/
+│   ├── PROCESSED_TRAJECTORY/{processed.xtc, processed_pbc.xtc}
+│   ├── REFERENCE_STRUCTURE/reference.gro
+│   └── preprocessing_report.txt
 └── logs/analysis.log
 ```
 
+`--full-output` adds every scored candidate PDB and per-cluster medoid PDB;
+the default tree holds final results and one pose per successful method only.
+
 **Recommended reading order**
 
-1. `reports/FINAL_FRAME_SELECTION_REPORT.txt` — the chosen frame and why.
-2. `reports/METHOD_AND_POSE_SUMMARY.txt` — best method vs best pose.
-3. `reports/METHOD_COVERAGE.txt` — did every method actually run?
-4. `clustering/clustering_summary.csv` — how all solutions ranked.
-5. `benchmarking/benchmarking_report.txt` — how the GROMOS comparison looks.
-6. `scoring/sensitivity_analysis.csv` — how stable the winner is.
+1. `01_FINAL_RESULTS/FINAL_REPORT.txt` — the answer and why, in plain language.
+2. `01_FINAL_RESULTS/FINAL_SUMMARY.csv` — the key numbers on one screen.
+3. `02_METHOD_COMPARISON/METHOD_RANKING.csv` — how methods ranked and which
+   failed or were skipped.
+4. `02_METHOD_COMPARISON/POSE_RANKING.csv` — the best pose per method.
+5. `03_PLOTS/K_SELECTION.png` — elbow K vs selected K.
+6. `04_ADVANCED_ANALYSIS/INTERMEDIATE_RESULTS/benchmarking_report.txt` — the
+   GROMOS comparison detail.
+7. `04_ADVANCED_ANALYSIS/SENSITIVITY_ANALYSIS/sensitivity_analysis.csv` — how
+   stable the winner is.
 
 **Cluster numbers are 1-based in all reports, CSVs, and filenames.**
 
@@ -642,7 +679,8 @@ Ready-made configs:
 ## 11. Troubleshooting
 
 **A method is missing or says `not_run`.**
-Open `reports/METHOD_COVERAGE.txt` or `clustering/method_coverage.json`. The
+Open `04_ADVANCED_ANALYSIS/INTERMEDIATE_RESULTS/METHOD_COVERAGE.txt` or
+`method_coverage.json`. The
 reason is recorded: disabled in config, HELM over its frame cap, distance
 matrix unavailable (too many frames), or the method produced no solution.
 
@@ -670,7 +708,8 @@ Your analysis-frame count exceeded `clustering.helm_max_frames` (default
 
 **No ligand was detected.**
 The interaction component is dropped and the other weights are renormalised;
-`scoring/scoring_weights.yaml` shows the effective weights. Set
+`04_ADVANCED_ANALYSIS/INTERMEDIATE_RESULTS/scoring_weights.yaml` shows the
+effective weights. Set
 `preprocess.ligand_selection` explicitly if auto-detection missed your ligand.
 
 **Memory use is high.**

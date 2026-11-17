@@ -57,6 +57,10 @@ def build_parser() -> argparse.ArgumentParser:
                     action="store_true", default=None)
     ap.add_argument("--no-select-best-frame", dest="select_best_frame",
                     action="store_false")
+    ap.add_argument("--full-output", dest="full_output",
+                    action="store_true", default=None,
+                    help="also export every candidate/cluster PDB under "
+                         "04_ADVANCED_ANALYSIS (default: final results only)")
     return ap
 
 

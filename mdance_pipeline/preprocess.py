@@ -14,6 +14,8 @@ import MDAnalysis.transformations as transforms
 from MDAnalysis.analysis import align as mda_align
 from MDAnalysis.analysis import rms as mda_rms
 
+from mdance_pipeline import output_layout
+
 PROTEIN_WATER_ION_RESNAMES = {
     "SOL", "WAT", "HOH", "TIP3", "TIP4", "ALK", "SPC", "SOD", "NA", "NA+",
     "CL", "CL-", "K", "K+", "MG", "ZN", "CA", "ION", "IONS",
@@ -174,8 +176,10 @@ def preprocess_trajectory(cfg: dict, logger: logging.Logger) -> dict:
     """
     p = cfg["preprocess"]
     out_dir = cfg["system"]["output_dir"]
-    pre_dir = os.path.join(out_dir, "preprocessing")
+    pre_dir = os.path.join(out_dir, output_layout.PROCESSED_DIR)
+    ref_dir = os.path.join(out_dir, output_layout.REFERENCE_DIR)
     os.makedirs(pre_dir, exist_ok=True)
+    os.makedirs(ref_dir, exist_ok=True)
 
     top = p.get("tpr") or p.get("gro")
     u = mda.Universe(top, p["xtc"], format="XTC")
@@ -240,22 +244,27 @@ def preprocess_trajectory(cfg: dict, logger: logging.Logger) -> dict:
     # ----- processed.gro (reference frame, all atoms) ------------------------
     u_g = mda.Universe(top, final_xtc, format="XTC")
     u_g.trajectory[ref_frame_in_processed]
-    gro_path = os.path.join(pre_dir, "processed.gro")
+    gro_path = os.path.join(ref_dir, "reference.gro")
     u_g.atoms.write(gro_path)
     logger.info("Wrote reference-frame structure: %s", gro_path)
 
     # ----- feature extraction (MDANCE `gen_traj_numpy` convention) -----------
     feature_rows: list[np.ndarray] = []
-    frame_indices: list[int] = []
-    times: list[float] = []
     n_frames_seen = u_g.trajectory.n_frames
-    for i, ts in enumerate(u_g.trajectory):
+    # Keep the ORIGINAL trajectory frame numbers (and times) selected by
+    # classify_frames. The processed XTC is re-indexed 0..n-1, so ts.frame
+    # here would silently lose the stride/equilibration mapping.
+    frame_indices = [int(i) for i in keep_idx]
+    times = [float(t) for t in keep_time]
+    if len(frame_indices) != n_frames_seen:
+        raise RuntimeError(
+            f"Frame mapping mismatch: kept {len(frame_indices)} frame(s) but "
+            f"processed trajectory has {n_frames_seen}.")
+    for ts in u_g.trajectory:
         # MDANCE gen_traj_numpy convention: one row per frame, flattened as
         # x1,y1,z1, x2,y2,z2, ... of the SELECTED atoms
         feature_rows.append(
             ts.positions[sel_atoms.indices].astype(np.float64).reshape(-1))
-        times.append(float(ts.time))
-        frame_indices.append(int(ts.frame))
     X = np.asarray(feature_rows, dtype=np.float64)
     if not np.isfinite(X).all():
         raise ValueError("Non-finite tool positions survived preprocessing; "
@@ -281,6 +290,8 @@ def preprocess_trajectory(cfg: dict, logger: logging.Logger) -> dict:
     info = {
         "paths": {"processed_xtc": final_xtc, "processed_gro": gro_path,
                   "pbc_xtc": proc_xtc_prefix},
+        "n_frames_total": int(u.trajectory.n_frames),
+        "total_time_ns": float(u.trajectory.totaltime) / 1000.0,
         "X": X,
         "frame_indices": np.asarray(frame_indices, dtype=int),
         "times": np.asarray(times, dtype=float),
