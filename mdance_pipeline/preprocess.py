@@ -160,6 +160,42 @@ def unwrap_transform(ag, logger: logging.Logger | None = None):
         return transforms.unwrap(ag)
 
 
+def wrap_transform(ag, compound: str = "fragments",
+                   logger: logging.Logger | None = None):
+    """Wrap molecules while tolerating zero-mass fragments.
+
+    ``transforms.wrap(..., compound='fragments')`` shifts each bonded
+    fragment using its centre of mass. Some valid topologies contain
+    massless particles (virtual sites, dummy atoms, TIP4P lone-pair sites),
+    making a fragment's total mass zero; MDAnalysis then raises
+    ``Cannot use compound='fragments' with center='com'``. In that case wrap
+    the fragment by its centre of geometry instead. The shift is only a PBC
+    relocation, so it does not change the internal geometry used for
+    clustering.
+    """
+    if compound != "fragments":
+        return transforms.wrap(ag, compound=compound)
+    try:
+        zero_mass = any(float(frag.masses.sum()) <= 0.0
+                        for frag in ag.fragments)
+    except Exception:
+        zero_mass = False
+    if not zero_mass:
+        return transforms.wrap(ag, compound="fragments")
+
+    if logger:
+        logger.warning(
+            "PBC wrap: a bonded fragment has zero total mass (virtual site "
+            "or dummy atom); using centre-of-geometry wrapping instead of "
+            "centre-of-mass wrapping.")
+
+    def _wrap_fragments_cog(ts):
+        ag.wrap(compound="fragments", center="cog")
+        return ts
+
+    return _wrap_fragments_cog
+
+
 def preprocess_trajectory(cfg: dict, logger: logging.Logger) -> dict:
     """Full Phase-2 preprocessing (pipeline-added; MDAnalysis-native ops).
 
@@ -203,7 +239,7 @@ def preprocess_trajectory(cfg: dict, logger: logging.Logger) -> dict:
     ag_center = protein_ag if protein_ag.n_atoms else u.atoms
     transform_list = []
     if p.get("wrap_molecules", True):
-        transform_list.append(transforms.wrap(u.atoms, compound=compound))
+        transform_list.append(wrap_transform(u.atoms, compound, logger))
     if p.get("wrap_molecules", True) and compound == "fragments":
         transform_list.append(unwrap_transform(u.atoms, logger))
     if p.get("center_protein", True):

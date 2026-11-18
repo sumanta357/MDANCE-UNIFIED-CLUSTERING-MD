@@ -223,6 +223,23 @@ def test_output_layout_creates_simplified_tree(tmp_path):
         assert os.path.isdir(tmp_path / sub), f"missing folder: {sub}"
 
 
+def test_wrap_transform_handles_zero_mass_fragments():
+    """A massless bonded fragment must wrap by geometry, not crash."""
+    import MDAnalysis as mda
+    u = mda.Universe.empty(2, n_residues=1,
+                           atom_resindex=[0, 0], trajectory=True)
+    u.add_TopologyAttr("masses", [0.0, 0.0])
+    u.add_TopologyAttr("bonds", [(0, 1)])
+    u.dimensions = [10, 10, 10, 90, 90, 90]
+    u.atoms.positions = [[11.0, 1.0, 1.0], [12.0, 1.0, 1.0]]
+    u.trajectory.add_transformations(
+        preprocess.wrap_transform(u.atoms, "fragments"))
+    assert np.all(u.atoms.positions >= 0.0)
+    assert np.all(u.atoms.positions < 10.0)
+    # the bonded pair stays together
+    assert abs(u.atoms.positions[1, 0] - u.atoms.positions[0, 0] - 1.0) < 1e-6
+
+
 def test_unwrap_transform_version_fallback(monkeypatch):
     """MDAnalysis >= 2.9 removed unwrap(compound=...); fall back cleanly."""
     calls = []
