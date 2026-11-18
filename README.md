@@ -97,6 +97,36 @@ If no `--tpr` is provided, the pipeline uses the `.gro` as topology (a GRO
 lacks bonds; neighbor searches that need bonds degrade gracefully — documented
 in the reports).
 
+## Standalone K-selection script (separate, optional)
+
+`k_selection_all_methods.py` is an **independent utility, not part of the main
+pipeline**. `run_mdance.py` already performs K selection internally; this
+script exists to run *only* the K scan and inspect how many clusters each
+method should use, without running clustering, validation, representatives,
+the GROMACS benchmark or scoring.
+
+It reuses the pipeline's `preprocess`, `features` and `k_selection` modules, so
+the K values match a full run on the same inputs.
+
+```bash
+python k_selection_all_methods.py \
+    --xtc trajectory.xtc --tpr topology.tpr \
+    --selection "protein and backbone" --stride 10 \
+    --k-min 2 --k-max 15 --out K_SELECTION_RESULTS
+```
+
+* **Inputs:** the `.xtc` trajectory plus a `.tpr` (or `.gro`) topology; optional
+  selection, stride, time window, K range and RNG seed. No other files needed.
+* **K-based methods** (independent scan each): NANI, DIVINE, HELM,
+  Agglomerative — plus one shared KmeansNANI scan (`--no-shared` to skip).
+  eQual, mdBIRCH, DBSCAN and GROMOS/Daura take no K and are reported as
+  `not_applicable`.
+* **Outputs (in `--out`):** `K_SELECTION_SUMMARY.csv`/`.json` (selected K,
+  elbow K, ambiguity, dispersion, silhouette, Davies–Bouldin, Calinski–Harabasz,
+  bootstrap ARI per method), `K_SELECTION_REPORT.txt`, `README.txt`,
+  `shared/` and `per_method/` directories with the full per-K scans and elbow
+  PNGs, and `logs/k_selection.log`. The script prints the same summary table.
+
 ## Output structure
 
 ```
